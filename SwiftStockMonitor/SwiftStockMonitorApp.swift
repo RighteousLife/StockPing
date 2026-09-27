@@ -1033,9 +1033,16 @@ private struct ProductSidebarRow: View {
     }
 }
 
+private struct DisplayEventGroup: Identifiable {
+    let id: UUID
+    let type: ProductEventType
+    let latestDate: Date
+    let count: Int
+}
+
 private struct ProductDetailView: View {
-    @State private var isProductInformationExpanded = false
-    @State private var isChangeHistoryExpanded = true
+    @State private var isProductInformationExpanded = true
+    @State private var isChangeHistoryExpanded = false
 
     let product: TrackedProduct
     let status: ProductStatus
@@ -1051,11 +1058,11 @@ private struct ProductDetailView: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { timeline in
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 20) {
                     // Header: Product Title & Status
                     VStack(alignment: .leading, spacing: 8) {
                         Text(product.productName)
-                            .font(.title2.weight(.semibold))
+                            .font(.system(size: 18, weight: .semibold))
                             .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
                             .id(product.id)
@@ -1064,7 +1071,7 @@ private struct ProductDetailView: View {
                             StatusBadge(status: status)
                             Text("·")
                                 .foregroundStyle(.tertiary)
-                            Text("Varyant: \(product.selectedVariant.displayDescription)")
+                            Text(cleanVariantDescription)
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
                         }
@@ -1173,7 +1180,7 @@ private struct ProductDetailView: View {
 
                     Divider()
 
-                    // Collapsible Section 1: Ürün Bilgileri
+                    // Collapsible Section 1: Ürün Bilgileri (Expanded by default)
                     DisclosureSection(
                         title: "Ürün Bilgileri",
                         isExpanded: $isProductInformationExpanded
@@ -1185,7 +1192,7 @@ private struct ProductDetailView: View {
 
                     // Collapsible Section 2: Değişiklik Geçmişi
                     DisclosureSection(
-                        title: "Değişiklik Geçmişi",
+                        title: "Değişiklik Geçmişi (\(product.events.count))",
                         isExpanded: $isChangeHistoryExpanded
                     ) {
                         historyContent
@@ -1201,9 +1208,9 @@ private struct ProductDetailView: View {
                                 .fill(storeConnectionStatus == "Bağlandı ✓" ? Color.green : Color.orange)
                                 .frame(width: 6, height: 6)
                         }
-                        Text("Store bağlantısı · \(storeConnectionStatus)")
+                        Text("Store bağlantısı: \(storeConnectionStatus)")
                             .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.secondary)
                         if let storeConnectionError {
                             Text("(\(storeConnectionError))")
                                 .font(.caption)
@@ -1216,14 +1223,22 @@ private struct ProductDetailView: View {
                 }
                 .frame(maxWidth: 680, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 20)
+                .padding(.horizontal, 28)
+                .padding(.vertical, 24)
             }
         }
         .onChange(of: product.id) { _, _ in
-            isProductInformationExpanded = false
-            isChangeHistoryExpanded = true
+            isProductInformationExpanded = true
+            isChangeHistoryExpanded = false
         }
+    }
+
+    private var cleanVariantDescription: String {
+        let desc = product.selectedVariant.displayDescription
+        if desc.lowercased().hasPrefix("varyant:") {
+            return desc.dropFirst(8).trimmingCharacters(in: .whitespaces)
+        }
+        return desc
     }
 
     private var latestStockChange: ProductEvent? {
@@ -1239,6 +1254,31 @@ private struct ProductDetailView: View {
                 }
             }
             .max { $0.date < $1.date }
+    }
+
+    private var groupedEvents: [DisplayEventGroup] {
+        let sorted = product.events.sorted { $0.date > $1.date }
+        guard !sorted.isEmpty else { return [] }
+
+        var groups: [DisplayEventGroup] = []
+        for event in sorted {
+            if let last = groups.last, last.type == event.type {
+                groups[groups.count - 1] = DisplayEventGroup(
+                    id: last.id,
+                    type: last.type,
+                    latestDate: last.latestDate,
+                    count: last.count + 1
+                )
+            } else {
+                groups.append(DisplayEventGroup(
+                    id: event.id,
+                    type: event.type,
+                    latestDate: event.date,
+                    count: 1
+                ))
+            }
+        }
+        return Array(groups.prefix(10))
     }
 
     private func nextCheckDescription(at now: Date) -> String {
@@ -1258,32 +1298,39 @@ private struct ProductDetailView: View {
 
     @ViewBuilder
     private var historyContent: some View {
-        if product.events.isEmpty {
+        if groupedEvents.isEmpty {
             Text("Henüz bir değişiklik yok")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         } else {
             VStack(alignment: .leading, spacing: 10) {
-                ForEach(product.events.sorted { $0.date > $1.date }.prefix(10)) { event in
+                ForEach(groupedEvents) { group in
                     HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: event.type.symbol)
+                        Image(systemName: group.type.symbol)
                             .font(.system(size: 13, weight: .regular))
-                            .foregroundStyle(event.type.color)
+                            .foregroundStyle(group.type.color)
                             .frame(width: 16, height: 16)
                             .padding(.top, 1)
 
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(event.type.title)
-                                .font(.subheadline.weight(.medium))
-                                .foregroundStyle(.primary)
-                            Text(TurkishRelativeTime.string(from: event.date))
+                            HStack(spacing: 5) {
+                                Text(group.type.title)
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(.primary)
+                                if group.count > 1 {
+                                    Text("(\(group.count) kez)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            Text(TurkishRelativeTime.string(from: group.latestDate))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                                .help(event.date.formatted(date: .long, time: .complete))
+                                .help(group.latestDate.formatted(date: .long, time: .complete))
                         }
                     }
                     .accessibilityElement(children: .combine)
-                    .accessibilityLabel("\(event.type.title), \(TurkishRelativeTime.string(from: event.date))")
+                    .accessibilityLabel("\(group.type.title)\(group.count > 1 ? ", \(group.count) kez" : ""), \(TurkishRelativeTime.string(from: group.latestDate))")
                 }
             }
         }
@@ -1333,7 +1380,8 @@ private struct ProductDetailView: View {
         Text(title)
             .font(.callout)
             .foregroundStyle(.secondary)
-            .frame(width: 130, alignment: .leading)
+            .frame(width: 135, alignment: .leading)
+            .lineLimit(1)
     }
 
     private func infoRow(_ title: String, _ value: String, isURL: Bool = false) -> some View {
@@ -1425,16 +1473,24 @@ private struct GlobalMonitoringStatusBar: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { timeline in
-            barContent(at: timeline.date)
+            ViewThatFits(in: .horizontal) {
+                barContent(at: timeline.date, isCompact: false)
+                barContent(at: timeline.date, isCompact: true)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 8)
+            .background(.bar)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(accessibilitySummary(at: timeline.date))
         }
     }
 
     @ViewBuilder
-    private func barContent(at now: Date) -> some View {
+    private func barContent(at now: Date, isCompact: Bool) -> some View {
         HStack(spacing: 12) {
             HStack(spacing: 8) {
                 statusIndicator
-                statusTitleView
+                statusTitleView(isCompact: isCompact)
             }
 
             Spacer(minLength: 8)
@@ -1444,20 +1500,17 @@ private struct GlobalMonitoringStatusBar: View {
                     HStack(spacing: 5) {
                         Image(systemName: "clock")
                             .foregroundStyle(.secondary)
-                        Text("Sonraki kontrol: \(countdownString(at: now))")
+                        Text(isCompact ? countdownString(at: now) : "Sonraki kontrol: \(countdownString(at: now))")
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .fixedSize()
                     }
                     .font(.caption)
                 }
 
-                powerBadge
+                powerBadge(isCompact: isCompact)
             }
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 8)
-        .background(.bar)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilitySummary(at: now))
     }
 
     @ViewBuilder
@@ -1481,50 +1534,68 @@ private struct GlobalMonitoringStatusBar: View {
     }
 
     @ViewBuilder
-    private var statusTitleView: some View {
+    private func statusTitleView(isCompact: Bool) -> some View {
         if isCheckSequenceRunning {
             HStack(spacing: 6) {
                 Text("Kontrol ediliyor…")
                     .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                    .fixedSize()
                 if activeProductCount > 0 {
                     Text("·")
                         .foregroundStyle(.secondary)
-                    Text("\(activeProductCount) aktif ürün")
+                    Text(isCompact ? "\(activeProductCount) aktif" : "\(activeProductCount) aktif ürün")
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize()
                 }
             }
         } else if !automaticCheckingEnabled {
             HStack(spacing: 6) {
                 Text("İzleme duraklatıldı")
                     .font(.callout.weight(.medium))
-                Text("·")
-                    .foregroundStyle(.secondary)
-                Text("Otomatik kontrol kapalı")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+                if !isCompact {
+                    Text("·")
+                        .foregroundStyle(.secondary)
+                    Text("Otomatik kontrol kapalı")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
             }
         } else if activeProductCount == 0 {
             HStack(spacing: 6) {
-                Text("İzlenecek aktif ürün yok")
+                Text(isCompact ? "Aktif ürün yok" : "İzlenecek aktif ürün yok")
                     .font(.callout.weight(.medium))
-                if totalProductCount > 0 {
+                    .lineLimit(1)
+                    .fixedSize()
+                if !isCompact && totalProductCount > 0 {
                     Text("·")
                         .foregroundStyle(.secondary)
                     Text("Tüm ürünler duraklatıldı")
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize()
                 }
             }
         } else {
             HStack(spacing: 6) {
                 Text("İzleme Aktif")
                     .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                    .fixedSize()
                 Text("·")
                     .foregroundStyle(.secondary)
-                Text("\(activeProductCount) ürün takip ediliyor")
+                Text(isCompact ? "\(activeProductCount) ürün" : "\(activeProductCount) ürün takip ediliyor")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
             }
         }
     }
@@ -1534,13 +1605,15 @@ private struct GlobalMonitoringStatusBar: View {
     }
 
     @ViewBuilder
-    private var powerBadge: some View {
+    private func powerBadge(isCompact: Bool) -> some View {
         if isPowerProtectionActive {
             HStack(spacing: 5) {
                 Image(systemName: powerSymbol)
                     .foregroundStyle(powerColor)
-                Text(powerText)
+                Text(powerText(isCompact: isCompact))
                     .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .fixedSize()
             }
             .font(.caption)
             .padding(.horizontal, 8)
@@ -1551,8 +1624,10 @@ private struct GlobalMonitoringStatusBar: View {
             HStack(spacing: 5) {
                 Image(systemName: "powersleep")
                     .foregroundStyle(.secondary)
-                Text("Uyku engelleme pasif")
+                Text(isCompact ? "Uyku: pasif" : "Uyku engelleme pasif")
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
             }
             .font(.caption)
             .padding(.horizontal, 8)
@@ -1578,11 +1653,14 @@ private struct GlobalMonitoringStatusBar: View {
         }
     }
 
-    private var powerText: String {
+    private func powerText(isCompact: Bool) -> String {
         switch powerMode {
-        case .normal: "macOS uyku yönetimi"
-        case .keepMacAndDisplayAwake: "Mac + ekran uyanık"
-        case .allowDisplaySleepKeepMacAwake: "Mac uyanık · ekran kapanabilir"
+        case .normal:
+            return isCompact ? "Normal uyku" : "macOS uyku yönetimi"
+        case .keepMacAndDisplayAwake:
+            return isCompact ? "Mac + ekran" : "Mac + ekran uyanık"
+        case .allowDisplaySleepKeepMacAwake:
+            return isCompact ? "Mac uyanık" : "Mac uyanık · ekran kapanabilir"
         }
     }
 
@@ -1621,7 +1699,7 @@ private struct GlobalMonitoringStatusBar: View {
         } else if activeProductCount == 0 {
             return "İzlenecek aktif ürün yok. Uyku koruması pasif."
         } else {
-            return "İzleme aktif. \(activeProductCount) ürün takip ediliyor. Sonraki kontrol \(countdownString(at: now)). Güç koruması: \(powerText)."
+            return "İzleme aktif. \(activeProductCount) ürün takip ediliyor. Sonraki kontrol \(countdownString(at: now)). Güç koruması: \(powerText(isCompact: false))."
         }
     }
 }
