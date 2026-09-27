@@ -4,6 +4,7 @@ import UserNotifications
 import AppKit
 import ServiceManagement
 import Combine
+import Network
 
 private enum ProductListFilter: String, CaseIterable, Identifiable {
     case all, inStock, outOfStock, checking, error, paused
@@ -216,6 +217,7 @@ private struct SwiftStockMenuBarContent: View {
         Button("Şimdi Tümünü Kontrol Et", systemImage: "arrow.clockwise") {
             menuBarState.requestManualCheck()
         }
+        .disabled(!NetworkReachabilityMonitor.shared.canProceedWithChecks)
         Button("Ayarlar", systemImage: "gearshape") {
             openSettings()
         }
@@ -262,6 +264,136 @@ private struct WindowCloseBehaviorInstaller: NSViewRepresentable {
     }
 }
 
+@MainActor
+final class NetworkReachabilityMonitor: ObservableObject {
+    static let shared = NetworkReachabilityMonitor()
+
+    enum Status: Equatable {
+        case available
+        case unavailable
+        case recovering
+    }
+
+    @Published private(set) var status: Status = .available
+    @Published private(set) var isConnected: Bool = true
+
+    private let monitor: NWPathMonitor
+    private let queue = DispatchQueue(label: "com.swiftstock.monitor.network", qos: .utility)
+    private var stabilizationTask: Task<Void, Never>?
+    private var hasReceivedInitialPath = false
+    private var isWaking = false
+
+    private init() {
+        self.monitor = NWPathMonitor()
+        setupPathMonitor()
+        setupSleepWakeObservers()
+    }
+
+    deinit {
+        monitor.cancel()
+        stabilizationTask?.cancel()
+    }
+
+    var canProceedWithChecks: Bool {
+        status == .available
+    }
+
+    private func setupPathMonitor() {
+        monitor.pathUpdateHandler = { [weak self] path in
+            Task { @MainActor [weak self] in
+                self?.handlePathUpdate(path)
+            }
+        }
+        monitor.start(queue: queue)
+    }
+
+    private func handlePathUpdate(_ path: NWPath) {
+        let isSatisfied = path.status == .satisfied
+
+        if !hasReceivedInitialPath {
+            hasReceivedInitialPath = true
+            isConnected = isSatisfied
+            status = isSatisfied ? .available : .unavailable
+            return
+        }
+
+        if isSatisfied {
+            if !isConnected || status == .unavailable || isWaking {
+                startStabilization(reason: isWaking ? "wake" : "recovery")
+            } else if status != .recovering {
+                status = .available
+                isConnected = true
+            }
+        } else {
+            stabilizationTask?.cancel()
+            stabilizationTask = nil
+            isWaking = false
+            isConnected = false
+            status = .unavailable
+            print("[NetworkGuard] Ağ bağlantısı kesildi. Stok kontrolleri bekletiliyor.")
+        }
+    }
+
+    private func setupSleepWakeObservers() {
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleWillSleep()
+            }
+        }
+
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleDidWake()
+            }
+        }
+    }
+
+    private func handleWillSleep() {
+        stabilizationTask?.cancel()
+        stabilizationTask = nil
+        isWaking = true
+        status = .recovering
+        print("[NetworkGuard] Sistem uykuya geçiyor. Kontroller duraklatıldı.")
+    }
+
+    private func handleDidWake() {
+        print("[NetworkGuard] Sistem uyandı. Ağ stabilizasyonu bekleniyor...")
+        isWaking = true
+        startStabilization(reason: "wake")
+    }
+
+    private func startStabilization(reason: String) {
+        stabilizationTask?.cancel()
+        status = .recovering
+
+        stabilizationTask = Task { @MainActor in
+            // Stabilization delay: 2.5 seconds
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard !Task.isCancelled else { return }
+
+            isWaking = false
+            let isSatisfied = monitor.currentPath.status == .satisfied
+            if isSatisfied {
+                isConnected = true
+                status = .available
+                print("[NetworkGuard] Ağ bağlantısı doğrulandı ve stabilize oldu (\(reason)).")
+            } else {
+                isConnected = false
+                status = .unavailable
+                print("[NetworkGuard] Stabilizasyon sonrası ağ bağlantısı henüz yok (\(reason)).")
+            }
+        }
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject private var menuBarState: SwiftStockMenuBarState
     @EnvironmentObject private var windowController: MainWindowController
@@ -288,6 +420,7 @@ struct ContentView: View {
     @State private var isCheckSequenceRunning = false
     @State private var automaticCheckTimer: Timer?
     @State private var pendingCheckContinuation: CheckedContinuation<Void, Never>?
+    @StateObject private var networkMonitor = NetworkReachabilityMonitor.shared
 
     init() {
         let products = TrackedProductStore.load()
@@ -455,7 +588,7 @@ struct ContentView: View {
                                 Button("Şimdi Kontrol Et", systemImage: "arrow.clockwise") {
                                     startManualCheck(for: product.id)
                                 }
-                                .disabled(isCheckSequenceRunning)
+                                .disabled(isCheckSequenceRunning || !networkMonitor.canProceedWithChecks)
                                 Button("Ürün Sayfasını Aç", systemImage: "safari") {
                                     NSWorkspace.shared.open(product.productURL)
                                 }
@@ -573,7 +706,8 @@ struct ContentView: View {
                     activeProductCount: activeMonitoredProductsCount,
                     totalProductCount: trackedProducts.count,
                     nextCheckDate: earliestNextCheckDate,
-                    powerMode: monitoringPowerMode
+                    powerMode: monitoringPowerMode,
+                    networkStatus: networkMonitor.status
                 )
                 Divider()
                 Group {
@@ -663,8 +797,8 @@ struct ContentView: View {
                         Label("Şimdi Kontrol Et", systemImage: "arrow.clockwise")
                     }
                 }
-                .help("Şimdi Kontrol Et (⌘R)")
-                .disabled(isCheckSequenceRunning || selectedProductIndex == nil)
+                .help(networkMonitor.canProceedWithChecks ? "Şimdi Kontrol Et (⌘R)" : "Ağ bağlantısı bekleniyor")
+                .disabled(isCheckSequenceRunning || selectedProductIndex == nil || !networkMonitor.canProceedWithChecks)
                 .keyboardShortcut("r", modifiers: .command)
 
                 Button {
@@ -672,8 +806,8 @@ struct ContentView: View {
                 } label: {
                     Label("Şimdi Tümünü Kontrol Et", systemImage: "arrow.clockwise.circle")
                 }
-                .help("Şimdi Tümünü Kontrol Et (⇧⌘R)")
-                .disabled(isCheckSequenceRunning || trackedProducts.isEmpty)
+                .help(networkMonitor.canProceedWithChecks ? "Şimdi Tümünü Kontrol Et (⇧⌘R)" : "Ağ bağlantısı bekleniyor")
+                .disabled(isCheckSequenceRunning || trackedProducts.isEmpty || !networkMonitor.canProceedWithChecks)
                 .keyboardShortcut("r", modifiers: [.command, .shift])
 
                 SettingsLink {
@@ -753,6 +887,13 @@ struct ContentView: View {
         .onChange(of: menuBarState.manualCheckRequestID) { _, _ in
             startManualCheckAll()
         }
+        .onChange(of: networkMonitor.status) { oldStatus, newStatus in
+            if newStatus == .available && oldStatus != .available {
+                print("[NetworkGuard] Ağ bağlantısı hazır ve stabilize oldu. Bekleyen kontroller yürütülüyor.")
+                runDueAutomaticChecks()
+                scheduleNextAutomaticCheck()
+            }
+        }
         .sheet(item: $activeSheet) { _ in
             AddProductSheet(defaultIntervalMinutes: checkIntervalMinutes) { newProduct in
                 let identity = ShopifyChecker.productIdentity(for: newProduct.productURL)
@@ -829,6 +970,10 @@ struct ContentView: View {
     private func runDueAutomaticChecks() {
         guard automaticCheckingEnabled else { return }
         guard !isCheckSequenceRunning else { return }
+        guard networkMonitor.canProceedWithChecks else {
+            print("[NetworkGuard] Ağ bağlantısı hazır değil, otomatik kontroller ertelendi.")
+            return
+        }
         let now = Date()
         let dueIDs = trackedProducts
             .filter { !$0.isPaused && ($0.nextCheckDate == nil || $0.nextCheckDate! <= now) }
@@ -844,6 +989,7 @@ struct ContentView: View {
         automaticCheckTimer?.invalidate()
         automaticCheckTimer = nil
         guard automaticCheckingEnabled, !isCheckSequenceRunning else { return }
+        guard networkMonitor.canProceedWithChecks else { return }
 
         let nextDate = trackedProducts
             .filter { !$0.isPaused }
@@ -864,6 +1010,10 @@ struct ContentView: View {
 
     private func startCheckSequence(for productIDs: [UUID]) {
         guard !isCheckSequenceRunning, !productIDs.isEmpty else { return }
+        guard networkMonitor.canProceedWithChecks else {
+            print("[NetworkGuard] Ağ bağlantısı hazır değil, kontrol sırası başlatılmadı.")
+            return
+        }
         isCheckSequenceRunning = true
         syncPowerPrevention()
         stopAutomaticMonitoring()
@@ -880,6 +1030,10 @@ struct ContentView: View {
 
             for productID in productIDs {
                 guard !Task.isCancelled else { break }
+                guard networkMonitor.canProceedWithChecks else {
+                    print("[NetworkGuard] Sıra sırasında ağ kesintisi tespit edildi, kalan kontroller ertelendi.")
+                    break
+                }
                 guard trackedProducts.contains(where: { $0.id == productID }) else { continue }
                 await performCheck(for: productID)
             }
@@ -891,10 +1045,12 @@ struct ContentView: View {
     }
 
     private func startManualCheck(for productID: UUID) {
+        guard networkMonitor.canProceedWithChecks else { return }
         startCheckSequence(for: [productID])
     }
 
     private func startManualCheckAll() {
+        guard networkMonitor.canProceedWithChecks else { return }
         startCheckSequence(for: trackedProducts.map(\.id))
     }
 
@@ -1480,6 +1636,7 @@ private struct GlobalMonitoringStatusBar: View {
     let totalProductCount: Int
     let nextCheckDate: Date?
     let powerMode: MonitoringPowerMode
+    let networkStatus: NetworkReachabilityMonitor.Status
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { timeline in
@@ -1506,7 +1663,27 @@ private struct GlobalMonitoringStatusBar: View {
             Spacer(minLength: 8)
 
             HStack(spacing: 10) {
-                if !isCheckSequenceRunning && automaticCheckingEnabled && activeProductCount > 0 {
+                if networkStatus == .unavailable {
+                    HStack(spacing: 5) {
+                        Image(systemName: "wifi.slash")
+                            .foregroundStyle(.secondary)
+                        Text(isCompact ? "Ağ yok" : "Ağ bağlantısı bekleniyor")
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                    .font(.caption)
+                } else if networkStatus == .recovering {
+                    HStack(spacing: 5) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .foregroundStyle(.secondary)
+                        Text(isCompact ? "Hazırlanıyor…" : "Ağ kontrol ediliyor")
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                    .font(.caption)
+                } else if !isCheckSequenceRunning && automaticCheckingEnabled && activeProductCount > 0 {
                     HStack(spacing: 5) {
                         Image(systemName: "clock")
                             .foregroundStyle(.secondary)
@@ -1525,7 +1702,14 @@ private struct GlobalMonitoringStatusBar: View {
 
     @ViewBuilder
     private var statusIndicator: some View {
-        if isCheckSequenceRunning {
+        if networkStatus == .recovering {
+            ProgressView()
+                .controlSize(.small)
+        } else if networkStatus == .unavailable {
+            Image(systemName: "wifi.slash")
+                .foregroundStyle(.orange)
+                .imageScale(.medium)
+        } else if isCheckSequenceRunning {
             ProgressView()
                 .controlSize(.small)
         } else if !automaticCheckingEnabled {
@@ -1545,7 +1729,37 @@ private struct GlobalMonitoringStatusBar: View {
 
     @ViewBuilder
     private func statusTitleView(isCompact: Bool) -> some View {
-        if isCheckSequenceRunning {
+        if networkStatus == .recovering {
+            HStack(spacing: 6) {
+                Text("Bağlantı kuruluyor…")
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                    .fixedSize()
+                if !isCompact {
+                    Text("·")
+                        .foregroundStyle(.secondary)
+                    Text("Ağ kontrol ediliyor")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+            }
+        } else if networkStatus == .unavailable {
+            HStack(spacing: 6) {
+                Text("İzleme beklemede")
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                    .fixedSize()
+                Text("·")
+                    .foregroundStyle(.secondary)
+                Text(isCompact ? "Ağ bekleniyor" : "Ağ bağlantısı bekleniyor")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+        } else if isCheckSequenceRunning {
             HStack(spacing: 6) {
                 Text("Kontrol ediliyor…")
                     .font(.callout.weight(.medium))
@@ -1702,7 +1916,11 @@ private struct GlobalMonitoringStatusBar: View {
     }
 
     private func accessibilitySummary(at now: Date) -> String {
-        if isCheckSequenceRunning {
+        if networkStatus == .unavailable {
+            return "İzleme beklemede. Ağ bağlantısı bekleniyor. Güç koruması: \(powerText(isCompact: false))."
+        } else if networkStatus == .recovering {
+            return "Ağ bağlantısı kuruluyor. Güç koruması: \(powerText(isCompact: false))."
+        } else if isCheckSequenceRunning {
             return "Stok kontrolü yapılıyor. \(activeProductCount) aktif ürün."
         } else if !automaticCheckingEnabled {
             return "İzleme duraklatıldı. Otomatik kontrol kapalı. Uyku koruması pasif."
@@ -1913,16 +2131,35 @@ private struct StorePageWebView: NSViewRepresentable {
             }
         }
 
+        private func isNetworkConnectivityError(_ error: Error) -> Bool {
+            if !NetworkReachabilityMonitor.shared.isConnected { return true }
+            let nsError = error as NSError
+            if nsError.domain == NSURLErrorDomain {
+                switch nsError.code {
+                case NSURLErrorNotConnectedToInternet,
+                     NSURLErrorNetworkConnectionLost,
+                     NSURLErrorDNSLookupFailed,
+                     NSURLErrorCannotConnectToHost,
+                     NSURLErrorTimedOut:
+                    return true
+                default:
+                    break
+                }
+            }
+            return false
+        }
+
         func webView(
             _ webView: WKWebView,
             didFailProvisionalNavigation navigation: WKNavigation!,
             withError error: Error
         ) {
             pageLoadFailed = true
-            showError(error.localizedDescription)
+            let isNetError = isNetworkConnectivityError(error)
+            showError(isNetError ? "Ağ bağlantısı yok" : error.localizedDescription)
             if queuedRequestID != nil {
                 queuedRequestID = nil
-                completeFailure("Store sayfası yüklenemedi: \(error.localizedDescription)")
+                completeFailure("Store sayfası yüklenemedi: \(error.localizedDescription)", isNetworkError: isNetError)
             }
         }
 
@@ -1932,10 +2169,11 @@ private struct StorePageWebView: NSViewRepresentable {
             withError error: Error
         ) {
             pageLoadFailed = true
-            showError(error.localizedDescription)
+            let isNetError = isNetworkConnectivityError(error)
+            showError(isNetError ? "Ağ bağlantısı yok" : error.localizedDescription)
             if queuedRequestID != nil {
                 queuedRequestID = nil
-                completeFailure("Store sayfası yüklenemedi: \(error.localizedDescription)")
+                completeFailure("Store sayfası yüklenemedi: \(error.localizedDescription)", isNetworkError: isNetError)
             }
         }
 
@@ -1989,7 +2227,8 @@ private struct StorePageWebView: NSViewRepresentable {
                 } catch {
                     guard self.activeProviderCheckRequestID == requestID,
                           self.product.wrappedValue.id == product.id else { return }
-                    self.completeFailure("Stok kontrolü başarısız: \(error.localizedDescription)")
+                    let isNetError = self.isNetworkConnectivityError(error)
+                    self.completeFailure("Stok kontrolü başarısız: \(error.localizedDescription)", isNetworkError: isNetError)
                 }
             }
 
@@ -2004,30 +2243,37 @@ private struct StorePageWebView: NSViewRepresentable {
                 self.activeProviderCheckRequestID = nil
                 self.providerCheckTask?.cancel()
                 self.providerCheckTask = nil
-                self.completeFailure("Stok kontrolü güvenlik zaman aşımına uğradı.")
+                let isNetError = !NetworkReachabilityMonitor.shared.isConnected
+                self.completeFailure("Stok kontrolü güvenlik zaman aşımına uğradı.", isNetworkError: isNetError)
             }
         }
 
-        private func completeFailure(_ message: String) {
-            if product.wrappedValue.lastCheckError == nil {
-                product.wrappedValue.record(.checkFailed, previousState: product.wrappedValue.lastKnownAvailable)
+        private func completeFailure(_ message: String, isNetworkError: Bool = false) {
+            if isNetworkError {
+                print("[NetworkGuard] Ağ bağlantısı sorunu nedeniyle kontrol ertelendi: \(message)")
+            } else {
+                if product.wrappedValue.lastCheckError == nil {
+                    product.wrappedValue.record(.checkFailed, previousState: product.wrappedValue.lastKnownAvailable)
+                }
+                product.wrappedValue.lastCheckError = message
             }
-            product.wrappedValue.lastCheckError = message
-            finishCheck()
+            finishCheck(deferNextCheckIfNetworkError: isNetworkError)
         }
 
-        private func finishCheck() {
+        private func finishCheck(deferNextCheckIfNetworkError: Bool = false) {
             pageReadinessTimeoutTask?.cancel()
             pageReadinessTimeoutTask = nil
             providerCheckTimeoutTask?.cancel()
             providerCheckTimeoutTask = nil
             providerCheckTask = nil
             activeProviderCheckRequestID = nil
-            let checkedAt = Date()
-            product.wrappedValue.lastChecked = checkedAt
-            product.wrappedValue.nextCheckDate = checkedAt.addingTimeInterval(
-                TimeInterval(product.wrappedValue.checkIntervalMinutes * 60)
-            )
+            if !deferNextCheckIfNetworkError {
+                let checkedAt = Date()
+                product.wrappedValue.lastChecked = checkedAt
+                product.wrappedValue.nextCheckDate = checkedAt.addingTimeInterval(
+                    TimeInterval(product.wrappedValue.checkIntervalMinutes * 60)
+                )
+            }
             isChecking.wrappedValue = false
             onCheckComplete()
         }
