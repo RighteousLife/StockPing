@@ -62,8 +62,12 @@ enum ZaraChecker {
         guard let colors = detail["colors"] as? [[String: Any]], !colors.isEmpty else { throw ZaraCheckerError.noColors }
 
         let groupID = productCode(in: market.remainingPath) ?? stringValue(detail["reference"])?.split(separator: "-").first.map(String.init) ?? ""
-        let storeID = integerValue(pageState.appConfig["storeId"] ?? pageState.appConfig["storeID"]) ?? turkeyStoreID
-        let productName = (detail["name"] as? String) ?? (product["name"] as? String) ?? (detail["seo"] as? [String: Any])?["name"] as? String
+        let parsedStoreID = integerValue(pageState.appConfig["storeId"] ?? pageState.appConfig["storeID"]) ?? turkeyStoreID
+        let storeID = parsedStoreID > 0 ? parsedStoreID : turkeyStoreID
+        let productName = (detail["name"] as? String)
+            ?? (product["name"] as? String)
+            ?? (detail["seo"] as? [String: Any])?["name"] as? String
+            ?? (pageState.payload["name"] as? String)
         guard let productName, !productName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ZaraCheckerError.malformedPageData
         }
@@ -106,20 +110,42 @@ enum ZaraChecker {
               !metadata.availabilitySKU.isEmpty,
               !metadata.colorProductID.isEmpty else { throw ZaraCheckerError.missingVariantSKU }
 
-        let url = URL(string: "https://www.zara.com/api/storefront/1/stores/\(metadata.storeID)/products/id/\(metadata.colorProductID)/availability")!
+        let storeID = metadata.storeID > 0 ? metadata.storeID : turkeyStoreID
+        let url = URL(string: "https://www.zara.com/api/storefront/1/stores/\(storeID)/products/id/\(metadata.colorProductID)/availability")!
         let result = try await webView.callAsyncJavaScript(
             """
-            const response = await fetch(endpoint, {
-              method: 'GET', cache: 'no-store', credentials: 'same-origin',
-              headers: { 'Accept': 'application/json' }
-            });
-            return { status: response.status, url: response.url, contentType: response.headers.get('content-type'), body: await response.text() };
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 15000);
+            try {
+              const response = await fetch(endpoint, {
+                method: 'GET', cache: 'no-store', credentials: 'same-origin',
+                headers: { 'Accept': 'application/json' },
+                signal: controller.signal
+              });
+              return {
+                status: response.status,
+                url: response.url,
+                contentType: response.headers.get('content-type'),
+                body: await response.text()
+              };
+            } catch (error) {
+              if (controller.signal.aborted) {
+                return { status: 408, timedOut: true };
+              }
+              throw error;
+            } finally {
+              clearTimeout(timeout);
+            }
             """,
             arguments: ["endpoint": url.absoluteString],
             in: nil,
             contentWorld: .page
         )
-        guard let response = result as? [String: Any], let status = integerValue(response["status"]),
+        guard let response = result as? [String: Any] else { throw ZaraCheckerError.invalidAvailabilityJSON }
+        if response["timedOut"] as? Bool == true {
+            throw ZaraCheckerError.availabilityRequestFailed("Zaman aşımı (15s).")
+        }
+        guard let status = integerValue(response["status"]),
               let body = response["body"] as? String else { throw ZaraCheckerError.invalidAvailabilityJSON }
         guard (200..<300).contains(status) else {
             throw ZaraCheckerError.availabilityRequestFailed("HTTP \(status).")
@@ -132,7 +158,7 @@ enum ZaraChecker {
 
         switch availability.lowercased() {
         case "in_stock", "low_on_stock": return true
-        case "out_of_stock": return false
+        case "out_of_stock", "back_soon", "coming_soon": return false
         default: throw ZaraCheckerError.unknownAvailability(availability)
         }
     }

@@ -64,7 +64,15 @@ enum ShopifyChecker {
     private static let swiftRequestTimeout: Duration = .seconds(15)
 
     static func canHandle(_ url: URL) -> Bool {
-        url.scheme?.lowercased() == "https" && productPath(in: url.path) != nil
+        guard url.scheme?.lowercased() == "https",
+              let host = url.host?.lowercased(),
+              !host.isEmpty,
+              productPath(in: url.path) != nil else { return false }
+        let nonShopifyDomains = ["zara.com", "bershka.com", "pullandbear.com"]
+        if nonShopifyDomains.contains(where: { host == $0 || host.hasSuffix("." + $0) }) {
+            return false
+        }
+        return true
     }
 
     static func productIdentity(for url: URL) -> String {
@@ -176,8 +184,11 @@ enum ShopifyChecker {
 
         guard let data = body.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data),
-              let object = json as? [String: Any],
-              let productID = stringValue(object["id"]),
+              let rawRoot = json as? [String: Any]
+        else { throw ShopifyCheckerError.invalidProductJSON }
+
+        let object = (rawRoot["product"] as? [String: Any]) ?? rawRoot
+        guard let productID = stringValue(object["id"]),
               let title = object["title"] as? String,
               !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let rawVariants = object["variants"] as? [[String: Any]]
@@ -242,8 +253,21 @@ enum ShopifyChecker {
     }
 
     private static func booleanValue(_ value: Any?) -> Bool? {
-        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
-        return number.boolValue
+        guard let value else { return nil }
+        if let bool = value as? Bool { return bool }
+        if let number = value as? NSNumber {
+            if CFGetTypeID(number) == CFBooleanGetTypeID() {
+                return number.boolValue
+            }
+            if number.intValue == 1 { return true }
+            if number.intValue == 0 { return false }
+        }
+        if let string = value as? String {
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if trimmed == "true" || trimmed == "1" { return true }
+            if trimmed == "false" || trimmed == "0" { return false }
+        }
+        return nil
     }
 
     private static func parseOptionNames(_ value: Any?) -> [String] {

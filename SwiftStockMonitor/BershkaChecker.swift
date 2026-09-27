@@ -252,9 +252,9 @@ enum BershkaChecker {
     nonisolated static func normalizedAvailability(stock: String?, isBuyable: Bool?) -> Bool? {
         guard let stock = stock?.lowercased() else { return nil }
         switch stock {
-        case "in_stock":
+        case "in_stock", "low_stock", "low_on_stock":
             return isBuyable
-        case "out_of_stock":
+        case "out_of_stock", "back_soon", "coming_soon":
             return false
         default:
             return nil
@@ -280,6 +280,7 @@ enum BershkaChecker {
                 } == true
                 if page.readyState == "complete", isNewDocument, let currentProduct = page.currentProduct {
                     let ids = [
+                        stringValue(currentProduct["id"]),
                         stringValue(currentProduct["bundleId"]),
                         stringValue(currentProduct["parentId"])
                     ].compactMap { $0 }
@@ -375,7 +376,7 @@ enum BershkaChecker {
         expectedProductID: String
     ) throws -> [String: Any] {
         guard let product else { throw BershkaCheckerError.productDataUnavailable }
-        let ids = [stringValue(product["bundleId"]), stringValue(product["parentId"])].compactMap { $0 }
+        let ids = [stringValue(product["id"]), stringValue(product["bundleId"]), stringValue(product["parentId"])].compactMap { $0 }
         guard ids.contains(expectedProductID) else {
             throw BershkaCheckerError.productIDMismatch(expected: expectedProductID, actual: ids.first ?? "bulunamadı")
         }
@@ -424,9 +425,10 @@ enum BershkaChecker {
     }
 
     private static func productID(in url: URL) -> String? {
-        guard let range = url.path.range(of: #"c0p([0-9]+)\.html$"#, options: .regularExpression) else { return nil }
-        let code = String(url.path[range])
-        return code.dropFirst(3).dropLast(5).isEmpty ? nil : String(code.dropFirst(3).dropLast(5))
+        guard let range = url.path.range(of: #"c0p([0-9]+)(?:\.html)?/?$"#, options: .regularExpression) else { return nil }
+        let code = String(url.path[range]).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let base = code.hasSuffix(".html") ? String(code.dropLast(5)) : code
+        return base.dropFirst(3).isEmpty ? nil : String(base.dropFirst(3))
     }
 
     private static func marketPath(in path: String) -> String? {

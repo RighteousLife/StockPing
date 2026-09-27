@@ -2836,6 +2836,28 @@ private struct StorePageWebView: NSViewRepresentable {
             return false
         }
 
+        private static func isTimeoutError(_ error: Error) -> Bool {
+            if let shopifyError = error as? ShopifyCheckerError {
+                if case .requestTimedOut = shopifyError { return true }
+            }
+            if let bershkaError = error as? BershkaCheckerError {
+                if case .pageLoadTimedOut = bershkaError { return true }
+            }
+            if let pullAndBearError = error as? PullAndBearCheckerError {
+                switch pullAndBearError {
+                case .pageLoadTimedOut, .javascriptEvaluationTimedOut:
+                    return true
+                default:
+                    break
+                }
+            }
+            let nsError = error as NSError
+            if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorTimedOut {
+                return true
+            }
+            return false
+        }
+
         func webView(
             _ webView: WKWebView,
             didFailProvisionalNavigation navigation: WKNavigation!,
@@ -2979,11 +3001,21 @@ private struct StorePageWebView: NSViewRepresentable {
                     guard self.activeProviderCheckRequestID == requestID,
                           self.product.wrappedValue.id == product.id else { return }
                     let isNetError = self.isNetworkConnectivityError(error)
+                    let outcome: DiagnosticOutcome
+                    if isNetError {
+                        outcome = .networkUnavailable
+                    } else if error is CancellationError {
+                        outcome = .cancelled
+                    } else if Self.isTimeoutError(error) {
+                        outcome = .timeout
+                    } else {
+                        outcome = .providerFailure
+                    }
                     self.completeFailure(
                         "Stok kontrolü başarısız: \(error.localizedDescription)",
                         isNetworkError: isNetError,
                         errorDetail: error.localizedDescription,
-                        outcome: isNetError ? .networkUnavailable : .providerFailure
+                        outcome: outcome
                     )
                 }
             }

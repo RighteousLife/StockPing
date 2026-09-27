@@ -153,7 +153,13 @@ enum PullAndBearChecker {
         let text = visibleText.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "tr_TR"))
         let classes = classNames.lowercased()
         let ariaSaysDisabled = ariaDisabled?.lowercased() == "true"
-        let unavailablePhrases = ["bana haber ver", "benzer urunleri goruntule", "urun bulunamadi", "tukendi", "stokta yok", "notify me", "similar products", "out of stock", "unavailable"]
+        let unavailablePhrases = [
+            "bana haber ver", "gelince haber ver", "stoklara gelince haber ver",
+            "benzer urunleri goruntule", "urun bulunamadi", "tukendi", "tukenmistir",
+            "stokta yok", "stokta kalmadi", "stoklar tukendi",
+            "notify me", "similar products", "out of stock", "unavailable",
+            "coming soon", "back soon"
+        ]
         if isDisabled || ariaSaysDisabled || classes.contains("is-back-soon") || classes.contains("is-disabled") ||
             classes.contains("unavailable") || classes.contains("out-of-stock") || unavailablePhrases.contains(where: text.contains) {
             return false
@@ -332,7 +338,7 @@ enum PullAndBearChecker {
             let gate = PullAndBearJavaScriptEvaluation(continuation: continuation)
             gate.timeoutTask = Task { @MainActor in
                 do {
-                    try await Task.sleep(for: .seconds(5))
+                    try await Task.sleep(for: .seconds(10))
                 } catch {
                     return
                 }
