@@ -7,7 +7,7 @@ import Combine
 import Network
 
 private enum ProductListFilter: String, CaseIterable, Identifiable {
-    case all, inStock, outOfStock, checking, error, paused
+    case all, inStock, outOfStock, checking, error, paused, noGroup
 
     var id: Self { self }
 
@@ -19,6 +19,7 @@ private enum ProductListFilter: String, CaseIterable, Identifiable {
         case .checking: "Kontrol ediliyor"
         case .error: "Kontrol sorunu"
         case .paused: "Duraklatıldı"
+        case .noGroup: "Grupsuz"
         }
     }
 }
@@ -38,6 +39,11 @@ private enum ProductListSort: String, CaseIterable, Identifiable {
     }
 }
 
+extension Notification.Name {
+    static let exportBackupRequested = Notification.Name("exportBackupRequested")
+    static let importBackupRequested = Notification.Name("importBackupRequested")
+}
+
 @main
 struct SwiftStockMonitorApp: App {
     @NSApplicationDelegateAdaptor private var appDelegate: SwiftStockAppDelegate
@@ -52,6 +58,20 @@ struct SwiftStockMonitorApp: App {
         }
         .defaultSize(width: 980, height: 640)
         .windowResizability(.contentSize)
+        .commands {
+            CommandGroup(after: .newItem) {
+                Divider()
+                Button("Yedek Dışa Aktar...") {
+                    NotificationCenter.default.post(name: .exportBackupRequested, object: nil)
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+
+                Button("Yedekten İçe Aktar...") {
+                    NotificationCenter.default.post(name: .importBackupRequested, object: nil)
+                }
+                .keyboardShortcut("i", modifiers: [.command, .shift])
+            }
+        }
 
         MenuBarExtra("StockPing", systemImage: "bell.badge") {
             SwiftStockMenuBarContent()
@@ -408,6 +428,10 @@ struct ContentView: View {
     @State private var selectedProductIDs: Set<UUID> = []
     @State private var productSearchText = ""
     @State private var productStatusFilter: ProductListFilter = .all
+    @State private var selectedProviderFilter: StoreProvider? = nil
+    @State private var selectedGroupFilter: String? = nil
+    @State private var selectedTagFilter: String? = nil
+    @ObservedObject private var orgStore = ProductOrganizationStore.shared
     @State private var productListSort: ProductListSort = .defaultOrder
     @State private var productIDsPendingDeletion: [UUID] = []
     @State private var isDeleteConfirmationPresented = false
@@ -426,6 +450,23 @@ struct ContentView: View {
         let products = TrackedProductStore.load()
         _trackedProducts = State(initialValue: products)
         _selectedProductID = State(initialValue: products.first?.id ?? UUID())
+        ProductOrganizationStore.shared.syncFromProducts(products)
+    }
+
+    private var isAnyFilterActive: Bool {
+        productStatusFilter != .all ||
+        selectedProviderFilter != nil ||
+        selectedGroupFilter != nil ||
+        selectedTagFilter != nil ||
+        !productSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func clearAllFilters() {
+        productStatusFilter = .all
+        selectedProviderFilter = nil
+        selectedGroupFilter = nil
+        selectedTagFilter = nil
+        productSearchText = ""
     }
 
     private var isMonitoringActive: Bool {
@@ -458,19 +499,48 @@ struct ContentView: View {
     private var visibleTrackedProducts: [TrackedProduct] {
         let filteredProducts = trackedProducts.filter { product in
             let query = productSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-            let matchesSearch = query.isEmpty || [product.productName, storeName(for: product), product.variantTitle]
-                .contains { $0.localizedCaseInsensitiveContains(query) }
+            let searchTokens = [
+                product.productName,
+                storeName(for: product),
+                product.variantTitle,
+                product.group ?? "",
+                product.tags.joined(separator: " ")
+            ]
+            let matchesSearch = query.isEmpty || searchTokens.contains { $0.localizedCaseInsensitiveContains(query) }
             let status = visibleStatus(for: product)
-            let matchesFilter: Bool
+            let matchesStatus: Bool
             switch productStatusFilter {
-            case .all: matchesFilter = true
-            case .inStock: matchesFilter = status == .inStock
-            case .outOfStock: matchesFilter = status == .outOfStock
-            case .checking: matchesFilter = status == .checking
-            case .error: matchesFilter = status == .error
-            case .paused: matchesFilter = status == .paused
+            case .all: matchesStatus = true
+            case .inStock: matchesStatus = status == .inStock
+            case .outOfStock: matchesStatus = status == .outOfStock
+            case .checking: matchesStatus = status == .checking
+            case .error: matchesStatus = status == .error
+            case .paused: matchesStatus = status == .paused
+            case .noGroup: matchesStatus = (product.group == nil || product.group?.isEmpty == true)
             }
-            return matchesSearch && matchesFilter
+
+            let matchesProvider: Bool
+            if let selectedProvider = selectedProviderFilter {
+                matchesProvider = product.provider == selectedProvider
+            } else {
+                matchesProvider = true
+            }
+
+            let matchesGroup: Bool
+            if let selectedGroup = selectedGroupFilter {
+                matchesGroup = product.group?.caseInsensitiveCompare(selectedGroup) == .orderedSame
+            } else {
+                matchesGroup = true
+            }
+
+            let matchesTag: Bool
+            if let selectedTag = selectedTagFilter {
+                matchesTag = product.tags.contains { $0.caseInsensitiveCompare(selectedTag) == .orderedSame }
+            } else {
+                matchesTag = true
+            }
+
+            return matchesSearch && matchesStatus && matchesProvider && matchesGroup && matchesTag
         }
 
         guard productListSort != .defaultOrder else { return filteredProducts }
@@ -638,23 +708,119 @@ struct ContentView: View {
                                 .accessibilityLabel("Şuna göre sırala")
                             }
                             Menu {
-                                Picker("Durum", selection: $productStatusFilter) {
+                                Section("Durum") {
                                     ForEach(ProductListFilter.allCases) { filter in
-                                        Text(filter.title).tag(filter)
+                                        Button {
+                                            productStatusFilter = filter
+                                        } label: {
+                                            HStack {
+                                                Text(filter.title)
+                                                if productStatusFilter == filter {
+                                                    Image(systemName: "checkmark")
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Section("Mağaza") {
+                                    Button {
+                                        selectedProviderFilter = nil
+                                    } label: {
+                                        HStack {
+                                            Text("Tüm Mağazalar")
+                                            if selectedProviderFilter == nil {
+                                                Image(systemName: "checkmark")
+                                            }
+                                        }
+                                    }
+                                    ForEach(StoreProvider.allCases, id: \.self) { provider in
+                                        Button {
+                                            selectedProviderFilter = provider
+                                        } label: {
+                                            HStack {
+                                                Text(provider.displayName)
+                                                if selectedProviderFilter == provider {
+                                                    Image(systemName: "checkmark")
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if !orgStore.availableGroups.isEmpty {
+                                    Section("Grup") {
+                                        Button {
+                                            selectedGroupFilter = nil
+                                        } label: {
+                                            HStack {
+                                                Text("Tüm Gruplar")
+                                                if selectedGroupFilter == nil {
+                                                    Image(systemName: "checkmark")
+                                                }
+                                            }
+                                        }
+                                        ForEach(orgStore.availableGroups, id: \.self) { group in
+                                            Button {
+                                                selectedGroupFilter = group
+                                            } label: {
+                                                HStack {
+                                                    Text(group)
+                                                    if selectedGroupFilter == group {
+                                                        Image(systemName: "checkmark")
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if !orgStore.availableTags.isEmpty {
+                                    Section("Etiket") {
+                                        Button {
+                                            selectedTagFilter = nil
+                                        } label: {
+                                            HStack {
+                                                Text("Tüm Etiketler")
+                                                if selectedTagFilter == nil {
+                                                    Image(systemName: "checkmark")
+                                                }
+                                            }
+                                        }
+                                        ForEach(orgStore.availableTags, id: \.self) { tag in
+                                            Button {
+                                                selectedTagFilter = tag
+                                            } label: {
+                                                HStack {
+                                                    Text(tag)
+                                                    if selectedTagFilter == tag {
+                                                        Image(systemName: "checkmark")
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if isAnyFilterActive {
+                                    Divider()
+                                    Button("Filtreleri Temizle", role: .destructive) {
+                                        clearAllFilters()
                                     }
                                 }
                             } label: {
-                                Label(productStatusFilter.title, systemImage: "line.3.horizontal.decrease.circle")
+                                Label("Filtrele", systemImage: isAnyFilterActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
                                     .labelStyle(.iconOnly)
+                                    .foregroundStyle(isAnyFilterActive ? Color.accentColor : Color.secondary)
                             }
                             .menuStyle(.borderlessButton)
-                            .help("Ürünleri duruma göre filtrele")
+                            .help(isAnyFilterActive ? "Filtreler etkin (tıkla ve yönet)" : "Ürünleri filtrele")
                         }
                         .textCase(nil)
                     }
                 }
                 .listStyle(.sidebar)
-                .searchable(text: $productSearchText, placement: .sidebar, prompt: "Ürün veya mağaza ara...")
+                .searchable(text: $productSearchText, placement: .sidebar, prompt: "Ürün, mağaza, grup veya etiket ara...")
                 .overlay {
                     if visibleTrackedProducts.isEmpty {
                         ContentUnavailableView {
@@ -662,10 +828,9 @@ struct ContentView: View {
                         } description: {
                             Text(productSearchText.isEmpty ? "Bir ürün ekleyerek stok takibine başlayın." : "Arama veya filtre ölçütlerini değiştirmeyi deneyin.")
                         } actions: {
-                            if !productSearchText.isEmpty || productStatusFilter != .all {
+                            if isAnyFilterActive {
                                 Button("Filtreleri Temizle") {
-                                    productSearchText = ""
-                                    productStatusFilter = .all
+                                    clearAllFilters()
                                 }
                             } else {
                                 Button("Ürün Ekle", systemImage: "plus") { activeSheet = .addProduct }
@@ -722,7 +887,10 @@ struct ContentView: View {
                             canChangeInterval: !isCheckSequenceRunning,
                             onOpenProduct: { NSWorkspace.shared.open(trackedProducts[selectedProductIndex].productURL) },
                             onDelete: { requestProductDeletion([trackedProducts[selectedProductIndex].id]) },
-                            onIntervalChange: { updateCheckInterval($0, for: trackedProducts[selectedProductIndex].id) }
+                            onIntervalChange: { updateCheckInterval($0, for: trackedProducts[selectedProductIndex].id) },
+                            onGroupChange: { updateGroup($0, for: trackedProducts[selectedProductIndex].id) },
+                            onAddTag: { addTag($0, for: trackedProducts[selectedProductIndex].id) },
+                            onRemoveTag: { removeTag($0, for: trackedProducts[selectedProductIndex].id) }
                         )
                     } else if trackedProducts.isEmpty {
                         EmptyProductsView {
@@ -810,6 +978,20 @@ struct ContentView: View {
                 .disabled(isCheckSequenceRunning || trackedProducts.isEmpty || !networkMonitor.canProceedWithChecks)
                 .keyboardShortcut("r", modifiers: [.command, .shift])
 
+                Menu {
+                    Button("Yedek Dışa Aktar...", systemImage: "square.and.arrow.up") {
+                        exportBackup()
+                    }
+                    .disabled(trackedProducts.isEmpty)
+
+                    Button("Yedekten İçe Aktar...", systemImage: "square.and.arrow.down") {
+                        importBackup()
+                    }
+                } label: {
+                    Label("Yedekle / İçe Aktar", systemImage: "externaldrive")
+                }
+                .help("Yedekle veya İçe Aktar")
+
                 SettingsLink {
                     Label("Ayarlar", systemImage: "gearshape")
                 }
@@ -863,6 +1045,12 @@ struct ContentView: View {
             if !visibleIDs.contains(selectedProductID) {
                 selectedProductID = visibleIDs.first ?? UUID()
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .exportBackupRequested)) { _ in
+            exportBackup()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .importBackupRequested)) { _ in
+            importBackup()
         }
         .onChange(of: automaticCheckingEnabled) { _, isEnabled in
             if isEnabled {
@@ -1153,6 +1341,47 @@ struct ContentView: View {
         NSPasteboard.general.setString(url.absoluteString, forType: .string)
     }
 
+    private func exportBackup() {
+        ProductBackupService.shared.exportProducts(trackedProducts)
+    }
+
+    private func importBackup() {
+        ProductBackupService.shared.promptImport(existingProducts: trackedProducts) { newProducts in
+            guard !newProducts.isEmpty else { return }
+            trackedProducts.append(contentsOf: newProducts)
+            TrackedProductStore.save(trackedProducts)
+            ProductOrganizationStore.shared.syncFromProducts(trackedProducts)
+            scheduleNextAutomaticCheck()
+            syncPowerPrevention()
+            refreshMenuBarSummary()
+        }
+    }
+
+    private func updateGroup(_ group: String?, for productID: UUID) {
+        guard let index = trackedProducts.firstIndex(where: { $0.id == productID }) else { return }
+        trackedProducts[index].group = group
+        TrackedProductStore.save(trackedProducts)
+        ProductOrganizationStore.shared.syncFromProducts(trackedProducts)
+    }
+
+    private func addTag(_ tag: String, for productID: UUID) {
+        guard let index = trackedProducts.firstIndex(where: { $0.id == productID }) else { return }
+        let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if !trackedProducts[index].tags.contains(trimmed) {
+            trackedProducts[index].tags.append(trimmed)
+            TrackedProductStore.save(trackedProducts)
+            ProductOrganizationStore.shared.syncFromProducts(trackedProducts)
+        }
+    }
+
+    private func removeTag(_ tag: String, for productID: UUID) {
+        guard let index = trackedProducts.firstIndex(where: { $0.id == productID }) else { return }
+        trackedProducts[index].tags.removeAll(where: { $0 == tag })
+        TrackedProductStore.save(trackedProducts)
+        ProductOrganizationStore.shared.syncFromProducts(trackedProducts)
+    }
+
 }
 
 private struct ProductSidebarRow: View {
@@ -1181,6 +1410,13 @@ private struct ProductSidebarRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 HStack(spacing: 4) {
+                    if let group = product.group, !group.isEmpty {
+                        Text(group)
+                            .lineLimit(1)
+                            .foregroundStyle(.secondary)
+                        Text("·")
+                            .foregroundStyle(.tertiary)
+                    }
                     Text(cleanVariantDescription)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -1206,11 +1442,91 @@ private struct DisplayEventGroup: Identifiable {
     let count: Int
 }
 
+private struct TagFlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? 400
+        var height: CGFloat = 0
+        var currentX: CGFloat = 0
+        var currentY: CGFloat = 0
+        var lineHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if currentX + size.width > width, currentX > 0 {
+                currentX = 0
+                currentY += lineHeight + spacing
+                lineHeight = 0
+            }
+            currentX += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+            height = max(height, currentY + lineHeight)
+        }
+
+        return CGSize(width: width, height: max(height, lineHeight))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var currentX = bounds.minX
+        var currentY = bounds.minY
+        var lineHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if currentX + size.width > bounds.maxX, currentX > bounds.minX {
+                currentX = bounds.minX
+                currentY += lineHeight + spacing
+                lineHeight = 0
+            }
+            subview.place(at: CGPoint(x: currentX, y: currentY), proposal: ProposedViewSize(size))
+            currentX += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+        }
+    }
+}
+
+private struct TagFlowView: View {
+    let tags: [String]
+    let onRemove: (String) -> Void
+
+    var body: some View {
+        TagFlowLayout(spacing: 6) {
+            ForEach(tags, id: \.self) { tag in
+                HStack(spacing: 4) {
+                    Text(tag)
+                        .font(.caption.weight(.medium))
+                    Button {
+                        onRemove(tag)
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 8, weight: .bold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(Color.secondary.opacity(0.12), in: Capsule())
+            }
+        }
+    }
+}
+
 private struct ProductDetailView: View {
     @State private var isProductInformationExpanded = true
     @State private var isChangeHistoryExpanded = false
     @State private var isDiagnosticExpanded = false
+    @State private var isNotificationAuditExpanded = false
     @State private var copiedDiagnosticFeedback = false
+
+    @State private var showingNewGroupAlert = false
+    @State private var newGroupName = ""
+    @State private var showingNewTagAlert = false
+    @State private var newTagName = ""
+
+    @ObservedObject private var orgStore = ProductOrganizationStore.shared
+    @ObservedObject private var auditManager = NotificationAuditManager.shared
 
     let product: TrackedProduct
     let status: ProductStatus
@@ -1222,6 +1538,9 @@ private struct ProductDetailView: View {
     let onOpenProduct: () -> Void
     let onDelete: () -> Void
     let onIntervalChange: (Int) -> Void
+    let onGroupChange: (String?) -> Void
+    let onAddTag: (String) -> Void
+    let onRemoveTag: (String) -> Void
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { timeline in
@@ -1237,6 +1556,16 @@ private struct ProductDetailView: View {
 
                         HStack(spacing: 8) {
                             StatusBadge(status: status)
+                            if let group = product.group, !group.isEmpty {
+                                Text("·")
+                                    .foregroundStyle(.tertiary)
+                                Text(group)
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(.primary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+                            }
                             Text("·")
                                 .foregroundStyle(.tertiary)
                             Text(cleanVariantDescription)
@@ -1367,6 +1696,78 @@ private struct ProductDetailView: View {
                                 .font(.callout)
                                 .foregroundStyle(automaticCheckingEnabled ? .primary : .secondary)
                         }
+                        GridRow {
+                            detailLabel("Grup")
+                            HStack(spacing: 8) {
+                                Menu {
+                                    Button("Grup Yok") {
+                                        onGroupChange(nil)
+                                    }
+                                    if !orgStore.availableGroups.isEmpty {
+                                        Divider()
+                                        ForEach(orgStore.availableGroups, id: \.self) { group in
+                                            Button {
+                                                onGroupChange(group)
+                                            } label: {
+                                                HStack {
+                                                    Text(group)
+                                                    if product.group == group {
+                                                        Image(systemName: "checkmark")
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Divider()
+                                    Button("Yeni Grup Oluştur...") {
+                                        newGroupName = ""
+                                        showingNewGroupAlert = true
+                                    }
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Text(product.group ?? "Grup Yok")
+                                            .font(.callout)
+                                            .foregroundStyle(product.group == nil ? .secondary : .primary)
+                                        Image(systemName: "chevron.up.chevron.down")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .menuStyle(.borderlessButton)
+                                .fixedSize()
+                            }
+                        }
+                        GridRow(alignment: .top) {
+                            detailLabel("Etiketler")
+                            VStack(alignment: .leading, spacing: 6) {
+                                if !product.tags.isEmpty {
+                                    TagFlowView(tags: product.tags) { tag in
+                                        onRemoveTag(tag)
+                                    }
+                                }
+
+                                Menu {
+                                    let unassignedTags = orgStore.availableTags.filter { !product.tags.contains($0) }
+                                    if !unassignedTags.isEmpty {
+                                        ForEach(unassignedTags, id: \.self) { tag in
+                                            Button(tag) {
+                                                onAddTag(tag)
+                                            }
+                                        }
+                                        Divider()
+                                    }
+                                    Button("Yeni Etiket Ekle...") {
+                                        newTagName = ""
+                                        showingNewTagAlert = true
+                                    }
+                                } label: {
+                                    Label(product.tags.isEmpty ? "Etiket Ekle" : "Yeni Etiket", systemImage: "plus")
+                                        .font(.caption)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                        }
                     }
 
                     Divider()
@@ -1398,6 +1799,16 @@ private struct ProductDetailView: View {
                     ) {
                         diagnosticContent
                     }
+
+                    Divider()
+
+                    // Collapsible Section 4: Bildirim Geçmişi
+                    DisclosureSection(
+                        title: "Bildirim Geçmişi (\(auditManager.events(for: product.id).count))",
+                        isExpanded: $isNotificationAuditExpanded
+                    ) {
+                        notificationAuditContent
+                    }
                 }
                 .frame(maxWidth: 680, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -1409,7 +1820,36 @@ private struct ProductDetailView: View {
             isProductInformationExpanded = true
             isChangeHistoryExpanded = false
             isDiagnosticExpanded = false
+            isNotificationAuditExpanded = false
             copiedDiagnosticFeedback = false
+        }
+        .alert("Yeni Grup Oluştur", isPresented: $showingNewGroupAlert) {
+            TextField("Grup adı", text: $newGroupName)
+            Button("Oluştur") {
+                let trimmed = newGroupName.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    _ = orgStore.createGroup(trimmed)
+                    onGroupChange(trimmed)
+                }
+                newGroupName = ""
+            }
+            Button("Vazgeç", role: .cancel) {
+                newGroupName = ""
+            }
+        }
+        .alert("Yeni Etiket Ekle", isPresented: $showingNewTagAlert) {
+            TextField("Etiket adı", text: $newTagName)
+            Button("Ekle") {
+                let trimmed = newTagName.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    _ = orgStore.createTag(trimmed)
+                    onAddTag(trimmed)
+                }
+                newTagName = ""
+            }
+            Button("Vazgeç", role: .cancel) {
+                newTagName = ""
+            }
         }
     }
 
@@ -1655,6 +2095,58 @@ private struct ProductDetailView: View {
         copiedDiagnosticFeedback = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             copiedDiagnosticFeedback = false
+        }
+    }
+
+    @ViewBuilder
+    private var notificationAuditContent: some View {
+        let events = auditManager.events(for: product.id)
+        if events.isEmpty {
+            Text("Henüz bildirim kaydı bulunmuyor.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(events) { event in
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: event.channel.symbol)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(.primary)
+                            .frame(width: 16, height: 16)
+                            .padding(.top, 1)
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Text(event.channel.title)
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(.primary)
+
+                                HStack(spacing: 4) {
+                                    Image(systemName: event.status.symbol)
+                                        .font(.caption2)
+                                    Text(event.status.title)
+                                        .font(.caption.weight(.medium))
+                                }
+                                .foregroundStyle(event.status.color)
+                            }
+
+                            if let message = event.message, !message.isEmpty {
+                                Text(message)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            Text(TurkishRelativeTime.string(from: event.date))
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .help(event.date.formatted(date: .long, time: .complete))
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(event.channel.title), \(event.status.title), \(event.message ?? ""), \(TurkishRelativeTime.string(from: event.date))")
+                }
+            }
         }
     }
 
@@ -2429,16 +2921,36 @@ private struct StorePageWebView: NSViewRepresentable {
                     )
 
                     if case .restocked = transition {
+                        let current = self.product.wrappedValue
                         if self.notificationsEnabled {
                             StockNotificationManager.shared.sendRestockNotification(
-                                productName: self.product.wrappedValue.productName,
-                                variantTitle: self.product.wrappedValue.variantTitle,
-                                productURL: self.product.wrappedValue.productURL
+                                productID: current.id,
+                                productName: current.productName,
+                                variantTitle: current.variantTitle,
+                                productURL: current.productURL
+                            )
+                        } else {
+                            NotificationAuditManager.shared.record(
+                                productID: current.id,
+                                productName: current.productName,
+                                variantTitle: current.variantTitle,
+                                channel: .macOS,
+                                status: .skipped,
+                                message: "macOS bildirimleri ayarlarda kapalı"
                             )
                         }
                         if self.emailNotificationsEnabled {
                             EmailNotificationService.shared.sendRestockNotification(
-                                for: self.product.wrappedValue
+                                for: current
+                            )
+                        } else {
+                            NotificationAuditManager.shared.record(
+                                productID: current.id,
+                                productName: current.productName,
+                                variantTitle: current.variantTitle,
+                                channel: .email,
+                                status: .skipped,
+                                message: "E-posta bildirimleri ayarlarda kapalı"
                             )
                         }
                     }
@@ -2617,6 +3129,7 @@ private final class StockNotificationManager {
     static let shared = StockNotificationManager()
 
     private struct RestockNotice {
+        let productID: UUID
         let productName: String
         let variantTitle: String
         let productURL: URL
@@ -2627,8 +3140,8 @@ private final class StockNotificationManager {
 
     private init() {}
 
-    func sendRestockNotification(productName: String, variantTitle: String, productURL: URL) {
-        pendingNotices.append(RestockNotice(productName: productName, variantTitle: variantTitle, productURL: productURL))
+    func sendRestockNotification(productID: UUID, productName: String, variantTitle: String, productURL: URL) {
+        pendingNotices.append(RestockNotice(productID: productID, productName: productName, variantTitle: variantTitle, productURL: productURL))
         guard !isProcessingNotices else { return }
 
         isProcessingNotices = true
@@ -2668,11 +3181,39 @@ private final class StockNotificationManager {
                         content: content,
                         trigger: nil
                     )
-                    try? await center.add(request)
+                    do {
+                        try await center.add(request)
+                        NotificationAuditManager.shared.record(
+                            productID: notice.productID,
+                            productName: notice.productName,
+                            variantTitle: notice.variantTitle,
+                            channel: .macOS,
+                            status: .sent,
+                            message: "macOS bildirimi başarıyla iletildi."
+                        )
+                    } catch {
+                        NotificationAuditManager.shared.record(
+                            productID: notice.productID,
+                            productName: notice.productName,
+                            variantTitle: notice.variantTitle,
+                            channel: .macOS,
+                            status: .failed,
+                            message: error.localizedDescription
+                        )
+                    }
                 }
             }
         } else {
-            // A denied permission must not affect stock tracking or keep stale notices queued.
+            for notice in pendingNotices {
+                NotificationAuditManager.shared.record(
+                    productID: notice.productID,
+                    productName: notice.productName,
+                    variantTitle: notice.variantTitle,
+                    channel: .macOS,
+                    status: .failed,
+                    message: "macOS bildirim izni verilmedi veya reddedildi."
+                )
+            }
             pendingNotices.removeAll()
         }
 

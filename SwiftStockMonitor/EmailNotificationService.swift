@@ -37,6 +37,9 @@ final class EmailNotificationService: ObservableObject {
     @Published private(set) var lastErrorMessage: String?
 
     private struct PendingEmail {
+        let productID: UUID
+        let productName: String
+        let variantTitle: String
         let subject: String
         let content: String
     }
@@ -78,7 +81,13 @@ final class EmailNotificationService: ObservableObject {
         let subject = "StockPing — Ürün Stokta!"
         let content = bodyLines.joined(separator: "\n")
 
-        pendingEmails.append(PendingEmail(subject: subject, content: content))
+        pendingEmails.append(PendingEmail(
+            productID: product.id,
+            productName: product.productName,
+            variantTitle: product.variantTitle,
+            subject: subject,
+            content: content
+        ))
         guard !isProcessingQueue else { return }
 
         isProcessingQueue = true
@@ -112,9 +121,26 @@ final class EmailNotificationService: ObservableObject {
         while !pendingEmails.isEmpty {
             let email = pendingEmails.removeFirst()
             do {
-                _ = try await Self.dispatchMail(subject: email.subject, content: email.content)
+                let recipient = try await Self.dispatchMail(subject: email.subject, content: email.content)
+                NotificationAuditManager.shared.record(
+                    productID: email.productID,
+                    productName: email.productName,
+                    variantTitle: email.variantTitle,
+                    channel: .email,
+                    status: .sent,
+                    message: "E-posta gönderildi: \(recipient)"
+                )
             } catch {
                 NSLog("[StockPing Email] Restock email failed: %@", error.localizedDescription)
+                let errorDesc = (error as? EmailNotificationError)?.localizedDescription ?? error.localizedDescription
+                NotificationAuditManager.shared.record(
+                    productID: email.productID,
+                    productName: email.productName,
+                    variantTitle: email.variantTitle,
+                    channel: .email,
+                    status: .failed,
+                    message: errorDesc
+                )
             }
         }
         isProcessingQueue = false

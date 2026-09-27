@@ -30,11 +30,20 @@ struct SelectedVariant: Codable, Hashable, Sendable {
     }
 }
 
-enum StoreProvider: String, Codable, Sendable {
+enum StoreProvider: String, Codable, Sendable, CaseIterable {
     case shopify
     case zara
     case bershka
     case pullAndBear
+
+    var displayName: String {
+        switch self {
+        case .shopify: "Shopify"
+        case .zara: "Zara"
+        case .bershka: "Bershka"
+        case .pullAndBear: "Pull&Bear"
+        }
+    }
 }
 
 struct ZaraVariantMetadata: Codable, Hashable, Sendable {
@@ -258,6 +267,8 @@ struct TrackedProduct: Identifiable {
     var pullAndBearMetadata: PullAndBearVariantMetadata? = nil
     var events: [ProductEvent] = []
     var latestDiagnostic: ProviderDiagnostic? = nil
+    var group: String? = nil
+    var tags: [String] = []
 
     var variantID: String { selectedVariant.id }
     var variantTitle: String { selectedVariant.displayTitle ?? "Tek seçenek" }
@@ -331,6 +342,8 @@ private struct SavedTrackedProduct: Codable {
     let pullAndBearMetadata: PullAndBearVariantMetadata?
     let events: [ProductEvent]
     let latestDiagnostic: ProviderDiagnostic?
+    let group: String?
+    let tags: [String]
 
     init(_ product: TrackedProduct) {
         id = product.id
@@ -348,12 +361,15 @@ private struct SavedTrackedProduct: Codable {
         pullAndBearMetadata = product.pullAndBearMetadata
         events = product.events
         latestDiagnostic = product.latestDiagnostic
+        group = product.group
+        tags = product.tags
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, productName, productURL, selectedVariant, lastChecked
         case checkIntervalMinutes, nextCheckDate, isPaused, lastCheckError
         case provider, zaraMetadata, bershkaMetadata, pullAndBearMetadata, events, latestDiagnostic
+        case group, tags
         // Fields written by trackedProducts.v1 before SelectedVariant was introduced.
         case variantID, variantTitle, lastKnownAvailable, status, options
     }
@@ -389,6 +405,8 @@ private struct SavedTrackedProduct: Codable {
         pullAndBearMetadata = try values.decodeIfPresent(PullAndBearVariantMetadata.self, forKey: .pullAndBearMetadata)
         events = Array((try values.decodeIfPresent([ProductEvent].self, forKey: .events) ?? []).suffix(50))
         latestDiagnostic = try values.decodeIfPresent(ProviderDiagnostic.self, forKey: .latestDiagnostic)
+        group = try values.decodeIfPresent(String.self, forKey: .group)
+        tags = try values.decodeIfPresent([String].self, forKey: .tags) ?? []
     }
 
     func encode(to encoder: Encoder) throws {
@@ -408,6 +426,10 @@ private struct SavedTrackedProduct: Codable {
         try values.encodeIfPresent(pullAndBearMetadata, forKey: .pullAndBearMetadata)
         try values.encode(events, forKey: .events)
         try values.encodeIfPresent(latestDiagnostic, forKey: .latestDiagnostic)
+        try values.encodeIfPresent(group, forKey: .group)
+        if !tags.isEmpty {
+            try values.encode(tags, forKey: .tags)
+        }
     }
 }
 
@@ -461,7 +483,9 @@ private extension SavedTrackedProduct {
             bershkaMetadata: bershkaMetadata,
             pullAndBearMetadata: pullAndBearMetadata,
             events: events,
-            latestDiagnostic: latestDiagnostic
+            latestDiagnostic: latestDiagnostic,
+            group: group,
+            tags: tags
         )
     }
 }
