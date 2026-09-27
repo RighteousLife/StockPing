@@ -61,7 +61,7 @@ struct SwiftStockMonitorApp: App {
 
         Settings {
             SettingsView()
-                .frame(width: 480, height: 480)
+                .frame(width: 480, height: 540)
         }
     }
 }
@@ -268,6 +268,7 @@ struct ContentView: View {
     @AppStorage("automaticCheckingEnabled") private var automaticCheckingEnabled = true
     @AppStorage("checkIntervalMinutes") private var checkIntervalMinutes = 1
     @AppStorage("stockNotificationsEnabled") private var stockNotificationsEnabled = true
+    @AppStorage("emailNotificationsEnabled") private var emailNotificationsEnabled = false
     @AppStorage("monitoringPowerMode") private var monitoringPowerMode: MonitoringPowerMode = .allowDisplaySleepKeepMacAwake
     @State private var trackedProducts: [TrackedProduct]
     @State private var selectedProductID: UUID
@@ -673,6 +674,7 @@ struct ContentView: View {
                     status: $storeConnectionStatus,
                     errorMessage: $storeConnectionError,
                     notificationsEnabled: stockNotificationsEnabled,
+                    emailNotificationsEnabled: emailNotificationsEnabled,
                     onCheckComplete: completeCurrentCheck
                 )
                 .frame(
@@ -1369,6 +1371,7 @@ private struct StorePageWebView: NSViewRepresentable {
     @Binding var status: String
     @Binding var errorMessage: String?
     let notificationsEnabled: Bool
+    let emailNotificationsEnabled: Bool
     let onCheckComplete: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -1379,6 +1382,7 @@ private struct StorePageWebView: NSViewRepresentable {
             status: $status,
             errorMessage: $errorMessage,
             notificationsEnabled: notificationsEnabled,
+            emailNotificationsEnabled: emailNotificationsEnabled,
             onCheckComplete: onCheckComplete
         )
     }
@@ -1395,7 +1399,8 @@ private struct StorePageWebView: NSViewRepresentable {
             checkRequestID,
             product: $product,
             webView: webView,
-            notificationsEnabled: notificationsEnabled
+            notificationsEnabled: notificationsEnabled,
+            emailNotificationsEnabled: emailNotificationsEnabled
         )
     }
 
@@ -1406,6 +1411,7 @@ private struct StorePageWebView: NSViewRepresentable {
         private var status: Binding<String>
         private var errorMessage: Binding<String?>
         private var notificationsEnabled: Bool
+        private var emailNotificationsEnabled: Bool
         private let onCheckComplete: () -> Void
         private var loadedProductID: UUID
         private var pageIsReady = false
@@ -1425,6 +1431,7 @@ private struct StorePageWebView: NSViewRepresentable {
             status: Binding<String>,
             errorMessage: Binding<String?>,
             notificationsEnabled: Bool,
+            emailNotificationsEnabled: Bool,
             onCheckComplete: @escaping () -> Void
         ) {
             self.product = product
@@ -1433,6 +1440,7 @@ private struct StorePageWebView: NSViewRepresentable {
             self.status = status
             self.errorMessage = errorMessage
             self.notificationsEnabled = notificationsEnabled
+            self.emailNotificationsEnabled = emailNotificationsEnabled
             self.onCheckComplete = onCheckComplete
             self.loadedProductID = product.wrappedValue.id
         }
@@ -1441,10 +1449,12 @@ private struct StorePageWebView: NSViewRepresentable {
             _ requestID: Int,
             product: Binding<TrackedProduct>,
             webView: WKWebView,
-            notificationsEnabled: Bool
+            notificationsEnabled: Bool,
+            emailNotificationsEnabled: Bool
         ) {
             self.product = product
             self.notificationsEnabled = notificationsEnabled
+            self.emailNotificationsEnabled = emailNotificationsEnabled
             let currentProduct = product.wrappedValue
             if currentProduct.id != loadedProductID {
                 loadedProductID = currentProduct.id
@@ -1569,12 +1579,19 @@ private struct StorePageWebView: NSViewRepresentable {
                     self.product.wrappedValue.lastAvailabilityTransition = transition
                     self.product.wrappedValue.selectedVariant.availability = available
                     self.product.wrappedValue.lastCheckError = nil
-                    if case .restocked = transition, self.notificationsEnabled {
-                        StockNotificationManager.shared.sendRestockNotification(
-                            productName: self.product.wrappedValue.productName,
-                            variantTitle: self.product.wrappedValue.variantTitle,
-                            productURL: self.product.wrappedValue.productURL
-                        )
+                    if case .restocked = transition {
+                        if self.notificationsEnabled {
+                            StockNotificationManager.shared.sendRestockNotification(
+                                productName: self.product.wrappedValue.productName,
+                                variantTitle: self.product.wrappedValue.variantTitle,
+                                productURL: self.product.wrappedValue.productURL
+                            )
+                        }
+                        if self.emailNotificationsEnabled {
+                            EmailNotificationService.shared.sendRestockNotification(
+                                for: self.product.wrappedValue
+                            )
+                        }
                     }
                     self.finishCheck()
                 } catch {
@@ -1735,10 +1752,14 @@ private struct SettingsView: View {
     @AppStorage("automaticCheckingEnabled") private var automaticCheckingEnabled = true
     @AppStorage("checkIntervalMinutes") private var checkIntervalMinutes = 1
     @AppStorage("stockNotificationsEnabled") private var stockNotificationsEnabled = true
+    @AppStorage("emailNotificationsEnabled") private var emailNotificationsEnabled = false
     @AppStorage("launchAtLoginEnabled") private var launchAtLoginEnabled = false
     @AppStorage("monitoringPowerMode") private var monitoringPowerMode: MonitoringPowerMode = .allowDisplaySleepKeepMacAwake
     @State private var launchAtLoginMessage: String?
     @State private var showingResetConfirmation = false
+    @State private var isSendingTestEmail = false
+    @State private var testEmailStatusMessage: String?
+    @State private var testEmailStatusIsError = false
 
     var body: some View {
         Form {
@@ -1757,6 +1778,40 @@ private struct SettingsView: View {
 
             Section("Bildirimler") {
                 Toggle("Bildirimler", isOn: $stockNotificationsEnabled)
+
+                Toggle("E-posta bildirimi", isOn: $emailNotificationsEnabled)
+
+                Text("Ürün tekrar stokta olduğunda macOS Mail üzerinden e-posta gönderir.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Text("E-posta gönderimi, Mac'inizde yapılandırılmış Mail hesabı üzerinden gerçekleştirilir.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if emailNotificationsEnabled {
+                    Button {
+                        sendTestEmail()
+                    } label: {
+                        if isSendingTestEmail {
+                            HStack(spacing: 6) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text("E-posta gönderiliyor…")
+                            }
+                        } else {
+                            Text("Test e-postası gönder")
+                        }
+                    }
+                    .disabled(isSendingTestEmail)
+
+                    if let testEmailStatusMessage {
+                        Text(testEmailStatusMessage)
+                            .font(.caption)
+                            .foregroundStyle(testEmailStatusIsError ? .red : .secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
 
             Section("Mac Uyku Davranışı") {
@@ -1860,11 +1915,34 @@ private struct SettingsView: View {
         }
     }
 
+    private func sendTestEmail() {
+        guard !isSendingTestEmail else { return }
+        isSendingTestEmail = true
+        testEmailStatusMessage = "E-posta gönderiliyor…"
+        testEmailStatusIsError = false
+
+        Task { @MainActor in
+            do {
+                let recipient = try await EmailNotificationService.shared.sendTestEmail()
+                testEmailStatusMessage = recipient.isEmpty ? "Test e-postası gönderildi." : "Test e-postası gönderildi (\(recipient))."
+                testEmailStatusIsError = false
+            } catch {
+                let message = (error as? EmailNotificationError)?.localizedDescription ?? error.localizedDescription
+                testEmailStatusMessage = "E-posta gönderilemedi: \(message)"
+                testEmailStatusIsError = true
+            }
+            isSendingTestEmail = false
+        }
+    }
+
     private func resetSettings() {
         automaticCheckingEnabled = true
         checkIntervalMinutes = 1
         stockNotificationsEnabled = true
+        emailNotificationsEnabled = false
         monitoringPowerMode = .default
+        testEmailStatusMessage = nil
+        testEmailStatusIsError = false
         if launchAtLoginEnabled || SMAppService.mainApp.status == .enabled || SMAppService.mainApp.status == .requiresApproval {
             setLaunchAtLogin(false)
         } else {
