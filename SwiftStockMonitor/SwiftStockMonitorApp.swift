@@ -1209,6 +1209,8 @@ private struct DisplayEventGroup: Identifiable {
 private struct ProductDetailView: View {
     @State private var isProductInformationExpanded = true
     @State private var isChangeHistoryExpanded = false
+    @State private var isDiagnosticExpanded = false
+    @State private var copiedDiagnosticFeedback = false
 
     let product: TrackedProduct
     let status: ProductStatus
@@ -1386,6 +1388,16 @@ private struct ProductDetailView: View {
                     ) {
                         historyContent
                     }
+
+                    Divider()
+
+                    // Collapsible Section 3: Kontrol Tanılama
+                    DisclosureSection(
+                        title: "Kontrol Tanılama",
+                        isExpanded: $isDiagnosticExpanded
+                    ) {
+                        diagnosticContent
+                    }
                 }
                 .frame(maxWidth: 680, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -1396,6 +1408,8 @@ private struct ProductDetailView: View {
         .onChange(of: product.id) { _, _ in
             isProductInformationExpanded = true
             isChangeHistoryExpanded = false
+            isDiagnosticExpanded = false
+            copiedDiagnosticFeedback = false
         }
     }
 
@@ -1499,6 +1513,148 @@ private struct ProductDetailView: View {
                     .accessibilityLabel("\(group.type.title)\(group.count > 1 ? ", \(group.count) kez" : ""), \(TurkishRelativeTime.string(from: group.latestDate))")
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var diagnosticContent: some View {
+        if let diag = product.latestDiagnostic {
+            VStack(alignment: .leading, spacing: 14) {
+                Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 10) {
+                    GridRow {
+                        detailLabel("Sağlayıcı")
+                        Text(diag.providerName)
+                            .font(.callout)
+                    }
+                    GridRow {
+                        detailLabel("Checker")
+                        Text(diag.checkerName)
+                            .font(.system(.callout, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    GridRow {
+                        detailLabel("Son kontrol")
+                        Text(diag.completedAt.formatted(date: .abbreviated, time: .standard))
+                            .font(.callout)
+                    }
+                    GridRow {
+                        detailLabel("Kontrol süresi")
+                        Text(diag.formattedDuration)
+                            .font(.callout)
+                    }
+                    GridRow {
+                        detailLabel("Sonuç")
+                        HStack(spacing: 6) {
+                            Image(systemName: diag.outcome.symbol)
+                                .foregroundStyle(diag.outcome.color)
+                                .font(.callout)
+                            Text(diag.outcome.title)
+                                .font(.callout.weight(.medium))
+                        }
+                    }
+                    GridRow {
+                        detailLabel("Stok durumu")
+                        if let stock = diag.stockResult {
+                            Text(stock ? "Stokta" : "Stokta değil")
+                                .font(.callout)
+                                .foregroundStyle(stock ? Color.green : Color.red)
+                        } else {
+                            Text("Bilinmiyor")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    GridRow {
+                        detailLabel("Ağ durumu")
+                        Text(diag.networkStatus)
+                            .font(.callout)
+                    }
+                    if let category = diag.errorCategory, category != "Yok" {
+                        GridRow {
+                            detailLabel("Hata türü")
+                            Text(category)
+                                .font(.callout)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    GridRow {
+                        detailLabel("Açıklama")
+                        Text(diag.userMessage)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let tech = diag.technicalDetail, !tech.isEmpty {
+                        GridRow {
+                            detailLabel("Teknik detay")
+                            Text(tech)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    GridRow {
+                        detailLabel("Son başarılı kontrol")
+                        if let lastSuccess = diag.lastSuccessfulCheckDate {
+                            Text("\(TurkishRelativeTime.string(from: lastSuccess)) (\(lastSuccess.formatted(date: .abbreviated, time: .shortened)))")
+                                .font(.callout)
+                        } else {
+                            Text("Kayıt yok")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .textSelection(.enabled)
+
+                Button(action: copyDiagnosticReport) {
+                    Label(copiedDiagnosticFeedback ? "Kopyalandı" : "Tanılama Bilgilerini Kopyala",
+                          systemImage: copiedDiagnosticFeedback ? "checkmark" : "doc.on.doc")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .padding(.top, 2)
+            }
+        } else {
+            Text("Henüz tanılama bilgisi yok. Ürün kontrol edildiğinde burada detaylı tanılama raporu görünecektir.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func copyDiagnosticReport() {
+        guard let diag = product.latestDiagnostic else { return }
+        var lines = [
+            "--- StockPing Tanılama Raporu ---",
+            "Ürün: \(product.productName)",
+            "Sağlayıcı: \(diag.providerName)",
+            "Checker: \(diag.checkerName)",
+            "Son Kontrol: \(diag.completedAt.formatted(date: .long, time: .standard))",
+            "Kontrol Süresi: \(diag.formattedDuration)",
+            "Sonuç: \(diag.outcome.title)",
+            "Stok Durumu: \(diag.stockResult == true ? "Stokta" : (diag.stockResult == false ? "Stokta değil" : "Bilinmiyor"))",
+            "Ağ Durumu: \(diag.networkStatus)"
+        ]
+        if let category = diag.errorCategory, category != "Yok" {
+            lines.append("Hata Türü: \(category)")
+        }
+        lines.append("Açıklama: \(diag.userMessage)")
+        if let tech = diag.technicalDetail, !tech.isEmpty {
+            lines.append("Teknik Detay: \(tech)")
+        }
+        if let lastSuccess = diag.lastSuccessfulCheckDate {
+            lines.append("Son Başarılı Kontrol: \(lastSuccess.formatted(date: .long, time: .standard))")
+        } else {
+            lines.append("Son Başarılı Kontrol: Kayıt yok")
+        }
+        lines.append("Ürün URL: \(product.productURL.absoluteString)")
+
+        let report = lines.joined(separator: "\n")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(report, forType: .string)
+        copiedDiagnosticFeedback = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            copiedDiagnosticFeedback = false
         }
     }
 
@@ -2032,6 +2188,7 @@ private struct StorePageWebView: NSViewRepresentable {
         private var providerCheckTimeoutTask: Task<Void, Never>?
         private var providerCheckTask: Task<Void, Never>?
         private var activeProviderCheckRequestID: Int?
+        private var checkStartTime: Date?
         private let providerCheckSafetyTimeout: Duration = .seconds(40)
 
         init(
@@ -2080,11 +2237,17 @@ private struct StorePageWebView: NSViewRepresentable {
             lastReceivedRequestID = requestID
 
             guard requestID > 0 else { return }
+            checkStartTime = Date()
             if pageIsReady {
                 checkAvailability(in: webView, product: product.wrappedValue, requestID: requestID)
             } else if pageLoadFailed {
                 let isNetError = !NetworkReachabilityMonitor.shared.isConnected || NetworkReachabilityMonitor.shared.status == .unavailable
-                completeFailure("Store sayfasına bağlanılamadığı için kontrol yapılamadı.", isNetworkError: isNetError)
+                completeFailure(
+                    "Store sayfasına bağlanılamadığı için kontrol yapılamadı.",
+                    isNetworkError: isNetError,
+                    errorDetail: "Store page failed to load prior to check",
+                    outcome: isNetError ? .networkUnavailable : .pageLoadFailure
+                )
             } else {
                 queuedRequestID = requestID
                 schedulePageReadinessTimeout(for: requestID, provider: currentProduct.provider)
@@ -2101,7 +2264,12 @@ private struct StorePageWebView: NSViewRepresentable {
                     self.showError("Sayfanın hazır olduğu doğrulanamadı: \(error.localizedDescription)")
                     if self.queuedRequestID != nil {
                         self.queuedRequestID = nil
-                        self.completeFailure("Sayfanın hazır olduğu doğrulanamadı: \(error.localizedDescription)")
+                        self.completeFailure(
+                            "Sayfanın hazır olduğu doğrulanamadı: \(error.localizedDescription)",
+                            isNetworkError: false,
+                            errorDetail: error.localizedDescription,
+                            outcome: .pageLoadFailure
+                        )
                     }
                     return
                 }
@@ -2110,7 +2278,12 @@ private struct StorePageWebView: NSViewRepresentable {
                     self.showError("Sayfa yüklemesi tamamlanamadı.")
                     if self.queuedRequestID != nil {
                         self.queuedRequestID = nil
-                        self.completeFailure("Sayfa yüklemesi tamamlanamadı.")
+                        self.completeFailure(
+                            "Sayfa yüklemesi tamamlanamadı.",
+                            isNetworkError: false,
+                            errorDetail: "document.readyState did not reach complete",
+                            outcome: .pageLoadFailure
+                        )
                     }
                     return
                 }
@@ -2161,7 +2334,12 @@ private struct StorePageWebView: NSViewRepresentable {
             showError(isNetError ? "Ağ bağlantısı yok" : error.localizedDescription)
             if queuedRequestID != nil {
                 queuedRequestID = nil
-                completeFailure("Store sayfası yüklenemedi: \(error.localizedDescription)", isNetworkError: isNetError)
+                completeFailure(
+                    "Store sayfası yüklenemedi: \(error.localizedDescription)",
+                    isNetworkError: isNetError,
+                    errorDetail: error.localizedDescription,
+                    outcome: isNetError ? .networkUnavailable : .pageLoadFailure
+                )
             }
         }
 
@@ -2175,7 +2353,12 @@ private struct StorePageWebView: NSViewRepresentable {
             showError(isNetError ? "Ağ bağlantısı yok" : error.localizedDescription)
             if queuedRequestID != nil {
                 queuedRequestID = nil
-                completeFailure("Store sayfası yüklenemedi: \(error.localizedDescription)", isNetworkError: isNetError)
+                completeFailure(
+                    "Store sayfası yüklenemedi: \(error.localizedDescription)",
+                    isNetworkError: isNetError,
+                    errorDetail: error.localizedDescription,
+                    outcome: isNetError ? .networkUnavailable : .pageLoadFailure
+                )
             }
         }
 
@@ -2211,6 +2394,40 @@ private struct StorePageWebView: NSViewRepresentable {
                     self.product.wrappedValue.lastAvailabilityTransition = transition
                     self.product.wrappedValue.selectedVariant.availability = available
                     self.product.wrappedValue.lastCheckError = nil
+
+                    let now = Date()
+                    let startTime = self.checkStartTime ?? now
+                    let duration = max(0, now.timeIntervalSince(startTime))
+                    let netStatus: String
+                    switch NetworkReachabilityMonitor.shared.status {
+                    case .available: netStatus = "Bağlı"
+                    case .unavailable: netStatus = "Bağlantı yok"
+                    case .recovering: netStatus = "Yeniden bağlanıyor"
+                    }
+                    let userMsg: String
+                    switch transition {
+                    case .restocked:
+                        userMsg = "Stok kontrolü başarılı. Yeni stok geldiği tespit edildi."
+                    case .wentOutOfStock:
+                        userMsg = "Stok kontrolü başarılı. Stoğun tükendiği tespit edildi."
+                    default:
+                        userMsg = "Stok kontrolü başarıyla tamamlandı. Ürün \(available ? "stokta" : "stokta değil")."
+                    }
+                    self.product.wrappedValue.latestDiagnostic = ProviderDiagnostic(
+                        providerName: self.product.wrappedValue.providerDisplayName,
+                        checkerName: self.product.wrappedValue.provider.defaultCheckerName,
+                        startedAt: startTime,
+                        completedAt: now,
+                        durationSeconds: duration,
+                        outcome: (transition == .restocked || transition == .wentOutOfStock) ? .stockChanged : .success,
+                        stockResult: available,
+                        networkStatus: netStatus,
+                        errorCategory: "Yok",
+                        userMessage: userMsg,
+                        technicalDetail: nil,
+                        lastSuccessfulCheckDate: now
+                    )
+
                     if case .restocked = transition {
                         if self.notificationsEnabled {
                             StockNotificationManager.shared.sendRestockNotification(
@@ -2230,7 +2447,12 @@ private struct StorePageWebView: NSViewRepresentable {
                     guard self.activeProviderCheckRequestID == requestID,
                           self.product.wrappedValue.id == product.id else { return }
                     let isNetError = self.isNetworkConnectivityError(error)
-                    self.completeFailure("Stok kontrolü başarısız: \(error.localizedDescription)", isNetworkError: isNetError)
+                    self.completeFailure(
+                        "Stok kontrolü başarısız: \(error.localizedDescription)",
+                        isNetworkError: isNetError,
+                        errorDetail: error.localizedDescription,
+                        outcome: isNetError ? .networkUnavailable : .providerFailure
+                    )
                 }
             }
 
@@ -2246,11 +2468,75 @@ private struct StorePageWebView: NSViewRepresentable {
                 self.providerCheckTask?.cancel()
                 self.providerCheckTask = nil
                 let isNetError = !NetworkReachabilityMonitor.shared.isConnected || NetworkReachabilityMonitor.shared.status == .unavailable
-                self.completeFailure("Stok kontrolü güvenlik zaman aşımına uğradı.", isNetworkError: isNetError)
+                self.completeFailure(
+                    "Stok kontrolü güvenlik zaman aşımına uğradı.",
+                    isNetworkError: isNetError,
+                    errorDetail: "Provider check safety timeout exceeded (40s)",
+                    outcome: isNetError ? .networkUnavailable : .timeout
+                )
             }
         }
 
-        private func completeFailure(_ message: String, isNetworkError: Bool = false) {
+        private func completeFailure(
+            _ message: String,
+            isNetworkError: Bool = false,
+            errorDetail: String? = nil,
+            outcome: DiagnosticOutcome = .providerFailure
+        ) {
+            let now = Date()
+            let startTime = checkStartTime ?? now
+            let duration = max(0, now.timeIntervalSince(startTime))
+            let netStatus: String
+            switch NetworkReachabilityMonitor.shared.status {
+            case .available: netStatus = "Bağlı"
+            case .unavailable: netStatus = "Bağlantı yok"
+            case .recovering: netStatus = "Yeniden bağlanıyor"
+            }
+
+            let sanitizedDetail = errorDetail.map { TechnicalDetailSanitizer.sanitize($0) }
+
+            let errorCategory: String
+            let userMsg: String
+            switch outcome {
+            case .networkUnavailable:
+                errorCategory = "Ağ Bağlantısı"
+                userMsg = "İnternet bağlantısı kurulamadığı için mağaza kontrolü gerçekleştirilemedi. Mevcut stok durumu korundu."
+            case .timeout:
+                errorCategory = "Zaman Aşımı"
+                userMsg = "Mağaza sayfası veya stok yanıtı belirlenen sürede tamamlanamadı (zaman aşımı)."
+            case .pageLoadFailure:
+                errorCategory = "Sayfa Yükleme"
+                userMsg = "Mağaza web sayfası yüklenirken hata oluştu."
+            case .providerFailure:
+                errorCategory = "Mağaza / Sağlayıcı"
+                userMsg = "Mağaza stok bilgisi ayrıştırılamadı veya beklenen ürün varyantı bulunamadı."
+            case .cancelled:
+                errorCategory = "İptal"
+                userMsg = "Kontrol işlemi iptal edildi."
+            default:
+                errorCategory = "Genel Hata"
+                userMsg = message
+            }
+
+            let previousSuccessfulDate = self.product.wrappedValue.latestDiagnostic?.lastSuccessfulCheckDate
+                ?? (self.product.wrappedValue.lastCheckError == nil ? self.product.wrappedValue.lastChecked : nil)
+
+            let diag = ProviderDiagnostic(
+                providerName: self.product.wrappedValue.providerDisplayName,
+                checkerName: self.product.wrappedValue.provider.defaultCheckerName,
+                startedAt: startTime,
+                completedAt: now,
+                durationSeconds: duration,
+                outcome: outcome,
+                stockResult: self.product.wrappedValue.lastKnownAvailable,
+                networkStatus: netStatus,
+                errorCategory: errorCategory,
+                userMessage: userMsg,
+                technicalDetail: sanitizedDetail,
+                lastSuccessfulCheckDate: previousSuccessfulDate
+            )
+            self.product.wrappedValue.latestDiagnostic = diag
+
             if isNetworkError {
                 print("[NetworkGuard] Ağ bağlantısı sorunu nedeniyle kontrol ertelendi: \(message)")
             } else {
@@ -2314,7 +2600,13 @@ private struct StorePageWebView: NSViewRepresentable {
                       self.queuedRequestID == requestID,
                       self.isChecking.wrappedValue else { return }
                 self.queuedRequestID = nil
-                self.completeFailure("Mağaza sayfası zamanında hazır olmadı. Lütfen yeniden deneyin.")
+                let isNetError = !NetworkReachabilityMonitor.shared.isConnected || NetworkReachabilityMonitor.shared.status == .unavailable
+                self.completeFailure(
+                    "Mağaza sayfası zamanında hazır olmadı. Lütfen yeniden deneyin.",
+                    isNetworkError: isNetError,
+                    errorDetail: "Page readiness timeout exceeded",
+                    outcome: isNetError ? .networkUnavailable : .timeout
+                )
             }
         }
     }

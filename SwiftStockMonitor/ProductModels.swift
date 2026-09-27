@@ -113,6 +113,134 @@ enum ProductStatus: String, Codable, Sendable {
     }
 }
 
+enum DiagnosticOutcome: String, Codable, Sendable {
+    case success
+    case stockChanged
+    case networkUnavailable
+    case providerFailure
+    case timeout
+    case pageLoadFailure
+    case cancelled
+    case unknown
+
+    var title: String {
+        switch self {
+        case .success: "Başarılı"
+        case .stockChanged: "Stok Değişimi"
+        case .networkUnavailable: "Ağ Bağlantısı Yok"
+        case .providerFailure: "Sağlayıcı Hatası"
+        case .timeout: "Zaman Aşımı"
+        case .pageLoadFailure: "Sayfa Yüklenemedi"
+        case .cancelled: "İptal Edildi"
+        case .unknown: "Bilinmiyor"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .success, .stockChanged: "checkmark.circle.fill"
+        case .networkUnavailable: "wifi.slash"
+        case .timeout: "clock.badge.exclamationmark.fill"
+        case .pageLoadFailure, .providerFailure, .unknown: "exclamationmark.triangle.fill"
+        case .cancelled: "xmark.circle"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .success, .stockChanged: .green
+        case .networkUnavailable, .timeout: .orange
+        case .pageLoadFailure, .providerFailure: .red
+        case .cancelled, .unknown: .secondary
+        }
+    }
+}
+
+struct ProviderDiagnostic: Codable, Hashable, Sendable {
+    var providerName: String
+    var checkerName: String
+    var startedAt: Date
+    var completedAt: Date
+    var durationSeconds: Double
+    var outcome: DiagnosticOutcome
+    var stockResult: Bool?
+    var networkStatus: String
+    var errorCategory: String?
+    var userMessage: String
+    var technicalDetail: String?
+    var lastSuccessfulCheckDate: Date?
+
+    var formattedDuration: String {
+        if durationSeconds < 1.0 {
+            return "<1 sn"
+        }
+        let formatted = String(format: "%.1f", durationSeconds).replacingOccurrences(of: ".", with: ",")
+        return "\(formatted) sn"
+    }
+}
+
+enum TechnicalDetailSanitizer {
+    static func sanitize(_ raw: String) -> String {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let sensitivePatterns = [
+            "(?i)bearer\\s+[A-Za-z0-9\\-\\._~\\+/]+=*",
+            "(?i)(cookie|set-cookie|authorization|token|secret|password|apikey|api_key):?\\s*[^;\\s,]+",
+            "(?i)<script[\\s\\S]*?>[\\s\\S]*?<\\/script>",
+            "<[^>]+>",
+            "\\{[\\s\\S]*?\\}"
+        ]
+
+        for pattern in sensitivePatterns {
+            if let regex = try? NSRegularExpression(pattern: pattern) {
+                let range = NSRange(text.startIndex..<text.endIndex, in: text)
+                text = regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "[Gizlendi]")
+            }
+        }
+
+        let pathPattern = "/Users/[^\\s/:]+"
+        if let regex = try? NSRegularExpression(pattern: pathPattern) {
+            let range = NSRange(text.startIndex..<text.endIndex, in: text)
+            text = regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "/[Kullanıcı]")
+        }
+
+        if text.count > 250 {
+            text = String(text.prefix(250)) + "..."
+        }
+
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+extension StoreProvider {
+    var defaultCheckerName: String {
+        switch self {
+        case .shopify: "ShopifyChecker"
+        case .zara: "ZaraChecker"
+        case .bershka: "BershkaChecker"
+        case .pullAndBear: "PullAndBearChecker"
+        }
+    }
+}
+
+extension TrackedProduct {
+    var providerDisplayName: String {
+        switch provider {
+        case .zara:
+            return "Zara Türkiye"
+        case .bershka:
+            return "Bershka Türkiye"
+        case .pullAndBear:
+            return "Pull&Bear Türkiye"
+        case .shopify:
+            if let host = productURL.host() {
+                return "Shopify (\(host))"
+            }
+            return "Shopify"
+        }
+    }
+}
+
 struct TrackedProduct: Identifiable {
     let id: UUID
     let productName: String
@@ -129,6 +257,7 @@ struct TrackedProduct: Identifiable {
     var bershkaMetadata: BershkaVariantMetadata? = nil
     var pullAndBearMetadata: PullAndBearVariantMetadata? = nil
     var events: [ProductEvent] = []
+    var latestDiagnostic: ProviderDiagnostic? = nil
 
     var variantID: String { selectedVariant.id }
     var variantTitle: String { selectedVariant.displayTitle ?? "Tek seçenek" }
@@ -179,7 +308,7 @@ struct TrackedProduct: Identifiable {
     )
 }
 
-enum AvailabilityTransition {
+enum AvailabilityTransition: Equatable, Sendable {
     case initial(available: Bool)
     case restocked
     case wentOutOfStock
@@ -201,6 +330,7 @@ private struct SavedTrackedProduct: Codable {
     let bershkaMetadata: BershkaVariantMetadata?
     let pullAndBearMetadata: PullAndBearVariantMetadata?
     let events: [ProductEvent]
+    let latestDiagnostic: ProviderDiagnostic?
 
     init(_ product: TrackedProduct) {
         id = product.id
@@ -217,12 +347,13 @@ private struct SavedTrackedProduct: Codable {
         bershkaMetadata = product.bershkaMetadata
         pullAndBearMetadata = product.pullAndBearMetadata
         events = product.events
+        latestDiagnostic = product.latestDiagnostic
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, productName, productURL, selectedVariant, lastChecked
         case checkIntervalMinutes, nextCheckDate, isPaused, lastCheckError
-        case provider, zaraMetadata, bershkaMetadata, pullAndBearMetadata, events
+        case provider, zaraMetadata, bershkaMetadata, pullAndBearMetadata, events, latestDiagnostic
         // Fields written by trackedProducts.v1 before SelectedVariant was introduced.
         case variantID, variantTitle, lastKnownAvailable, status, options
     }
@@ -257,6 +388,7 @@ private struct SavedTrackedProduct: Codable {
         bershkaMetadata = try values.decodeIfPresent(BershkaVariantMetadata.self, forKey: .bershkaMetadata)
         pullAndBearMetadata = try values.decodeIfPresent(PullAndBearVariantMetadata.self, forKey: .pullAndBearMetadata)
         events = Array((try values.decodeIfPresent([ProductEvent].self, forKey: .events) ?? []).suffix(50))
+        latestDiagnostic = try values.decodeIfPresent(ProviderDiagnostic.self, forKey: .latestDiagnostic)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -275,6 +407,7 @@ private struct SavedTrackedProduct: Codable {
         try values.encodeIfPresent(bershkaMetadata, forKey: .bershkaMetadata)
         try values.encodeIfPresent(pullAndBearMetadata, forKey: .pullAndBearMetadata)
         try values.encode(events, forKey: .events)
+        try values.encodeIfPresent(latestDiagnostic, forKey: .latestDiagnostic)
     }
 }
 
@@ -327,7 +460,8 @@ private extension SavedTrackedProduct {
             zaraMetadata: zaraMetadata,
             bershkaMetadata: bershkaMetadata,
             pullAndBearMetadata: pullAndBearMetadata,
-            events: events
+            events: events,
+            latestDiagnostic: latestDiagnostic
         )
     }
 }
