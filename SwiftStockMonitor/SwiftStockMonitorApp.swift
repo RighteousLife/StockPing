@@ -2083,7 +2083,8 @@ private struct StorePageWebView: NSViewRepresentable {
             if pageIsReady {
                 checkAvailability(in: webView, product: product.wrappedValue, requestID: requestID)
             } else if pageLoadFailed {
-                completeFailure("Store sayfasına bağlanılamadığı için kontrol yapılamadı.")
+                let isNetError = !NetworkReachabilityMonitor.shared.isConnected || NetworkReachabilityMonitor.shared.status == .unavailable
+                completeFailure("Store sayfasına bağlanılamadığı için kontrol yapılamadı.", isNetworkError: isNetError)
             } else {
                 queuedRequestID = requestID
                 schedulePageReadinessTimeout(for: requestID, provider: currentProduct.provider)
@@ -2132,18 +2133,19 @@ private struct StorePageWebView: NSViewRepresentable {
         }
 
         private func isNetworkConnectivityError(_ error: Error) -> Bool {
-            if !NetworkReachabilityMonitor.shared.isConnected { return true }
+            if !NetworkReachabilityMonitor.shared.isConnected || NetworkReachabilityMonitor.shared.status == .unavailable {
+                return true
+            }
             let nsError = error as NSError
             if nsError.domain == NSURLErrorDomain {
                 switch nsError.code {
                 case NSURLErrorNotConnectedToInternet,
-                     NSURLErrorNetworkConnectionLost,
-                     NSURLErrorDNSLookupFailed,
-                     NSURLErrorCannotConnectToHost,
-                     NSURLErrorTimedOut:
+                     NSURLErrorNetworkConnectionLost:
                     return true
                 default:
-                    break
+                    // Timeouts (NSURLErrorTimedOut), host reachability issues, and other errors
+                    // are treated as standard provider/request failures when network is otherwise connected.
+                    return false
                 }
             }
             return false
@@ -2243,7 +2245,7 @@ private struct StorePageWebView: NSViewRepresentable {
                 self.activeProviderCheckRequestID = nil
                 self.providerCheckTask?.cancel()
                 self.providerCheckTask = nil
-                let isNetError = !NetworkReachabilityMonitor.shared.isConnected
+                let isNetError = !NetworkReachabilityMonitor.shared.isConnected || NetworkReachabilityMonitor.shared.status == .unavailable
                 self.completeFailure("Stok kontrolü güvenlik zaman aşımına uğradı.", isNetworkError: isNetError)
             }
         }
