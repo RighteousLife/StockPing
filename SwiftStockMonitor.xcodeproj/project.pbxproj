@@ -18,6 +18,7 @@
 			A1000000000000000000000A /* TurkishRelativeTime.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* TurkishRelativeTime.swift */; };
 			A1000000000000000000000B /* BershkaChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* BershkaChecker.swift */; };
 			A1000000000000000000000C /* PullAndBearChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000C /* PullAndBearChecker.swift */; };
+			A1000000000000000000000D /* SleepPreventionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000D /* SleepPreventionManager.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -33,6 +34,7 @@
 			A2000000000000000000000A /* TurkishRelativeTime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurkishRelativeTime.swift; sourceTree = "<group>"; };
 			A2000000000000000000000B /* BershkaChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BershkaChecker.swift; sourceTree = "<group>"; };
 			A2000000000000000000000C /* PullAndBearChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PullAndBearChecker.swift; sourceTree = "<group>"; };
+			A2000000000000000000000D /* SleepPreventionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepPreventionManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -47,7 +49,7 @@
 			};
 			A30000000000000000000002 /* SwiftStockMonitor */ = {
 				isa = PBXGroup;
-				children = (A20000000000000000000001 /* SwiftStockMonitorApp.swift */, A20000000000000000000005 /* ShopifyChecker.swift */, A20000000000000000000006 /* ProductModels.swift */, A20000000000000000000007 /* StoreChecker.swift */, A20000000000000000000008 /* ZaraChecker.swift */, A20000000000000000000009 /* ProductEvents.swift */, A2000000000000000000000A /* TurkishRelativeTime.swift */, A2000000000000000000000B /* BershkaChecker.swift */, A2000000000000000000000C /* PullAndBearChecker.swift */, A20000000000000000000004 /* Assets.xcassets */,);
+				children = (A20000000000000000000001 /* SwiftStockMonitorApp.swift */, A20000000000000000000005 /* ShopifyChecker.swift */, A20000000000000000000006 /* ProductModels.swift */, A20000000000000000000007 /* StoreChecker.swift */, A20000000000000000000008 /* ZaraChecker.swift */, A20000000000000000000009 /* ProductEvents.swift */, A2000000000000000000000A /* TurkishRelativeTime.swift */, A2000000000000000000000B /* BershkaChecker.swift */, A2000000000000000000000C /* PullAndBearChecker.swift */, A2000000000000000000000D /* SleepPreventionManager.swift */, A20000000000000000000004 /* Assets.xcassets */,);
 				path = SwiftStockMonitor;
 				sourceTree = "<group>";
 			};
@@ -87,7 +89,7 @@
 			A50000000000000000000001 /* Sources */ = {
 				isa = PBXSourcesBuildPhase;
 				buildActionMask = 2147483647;
-				files = (A10000000000000000000001 /* SwiftStockMonitorApp.swift in Sources */, A10000000000000000000005 /* ShopifyChecker.swift in Sources */, A10000000000000000000006 /* ProductModels.swift in Sources */, A10000000000000000000007 /* StoreChecker.swift in Sources */, A10000000000000000000008 /* ZaraChecker.swift in Sources */, A10000000000000000000009 /* ProductEvents.swift in Sources */, A1000000000000000000000A /* TurkishRelativeTime.swift in Sources */, A1000000000000000000000B /* BershkaChecker.swift in Sources */, A1000000000000000000000C /* PullAndBearChecker.swift in Sources */,);
+				files = (A10000000000000000000001 /* SwiftStockMonitorApp.swift in Sources */, A10000000000000000000005 /* ShopifyChecker.swift in Sources */, A10000000000000000000006 /* ProductModels.swift in Sources */, A10000000000000000000007 /* StoreChecker.swift in Sources */, A10000000000000000000008 /* ZaraChecker.swift in Sources */, A10000000000000000000009 /* ProductEvents.swift in Sources */, A1000000000000000000000A /* TurkishRelativeTime.swift in Sources */, A1000000000000000000000B /* BershkaChecker.swift in Sources */, A1000000000000000000000C /* PullAndBearChecker.swift in Sources */, A1000000000000000000000D /* SleepPreventionManager.swift in Sources */,);
 				runOnlyForDeploymentPostprocessing = 0;
 			};
 /* End PBXSourcesBuildPhase section */

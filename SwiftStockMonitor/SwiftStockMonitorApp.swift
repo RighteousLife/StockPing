@@ -61,7 +61,7 @@ struct SwiftStockMonitorApp: App {
 
         Settings {
             SettingsView()
-                .frame(width: 480, height: 380)
+                .frame(width: 480, height: 480)
         }
     }
 }
@@ -76,6 +76,7 @@ private final class SwiftStockAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         Self.isTerminating = true
+        SleepPreventionManager.shared.configure(isMonitoringActive: false, mode: .normal)
         return .terminateNow
     }
 
@@ -267,6 +268,7 @@ struct ContentView: View {
     @AppStorage("automaticCheckingEnabled") private var automaticCheckingEnabled = true
     @AppStorage("checkIntervalMinutes") private var checkIntervalMinutes = 1
     @AppStorage("stockNotificationsEnabled") private var stockNotificationsEnabled = true
+    @AppStorage("monitoringPowerMode") private var monitoringPowerMode: MonitoringPowerMode = .allowDisplaySleepKeepMacAwake
     @State private var trackedProducts: [TrackedProduct]
     @State private var selectedProductID: UUID
     @State private var isSelectionMode = false
@@ -290,6 +292,17 @@ struct ContentView: View {
         let products = TrackedProductStore.load()
         _trackedProducts = State(initialValue: products)
         _selectedProductID = State(initialValue: products.first?.id ?? UUID())
+    }
+
+    private var isMonitoringActive: Bool {
+        (automaticCheckingEnabled && trackedProducts.contains(where: { !$0.isPaused })) || isCheckSequenceRunning
+    }
+
+    private func syncPowerPrevention() {
+        SleepPreventionManager.shared.configure(
+            isMonitoringActive: isMonitoringActive,
+            mode: monitoringPowerMode
+        )
     }
 
     private var selectedProductIndex: Int? {
@@ -680,6 +693,7 @@ struct ContentView: View {
         .onAppear {
             refreshMenuBarSummary()
             configureAutomaticMonitoring(runImmediately: true)
+            syncPowerPrevention()
         }
         .onChange(of: selectedProductID) { _, _ in
             refreshMenuBarSummary()
@@ -699,9 +713,19 @@ struct ContentView: View {
             } else {
                 stopAutomaticMonitoring()
             }
+            syncPowerPrevention()
         }
         .onChange(of: checkIntervalMinutes) { _, _ in
             // This setting only supplies the initial interval for products added later.
+        }
+        .onChange(of: monitoringPowerMode) { _, _ in
+            syncPowerPrevention()
+        }
+        .onChange(of: isCheckSequenceRunning) { _, _ in
+            syncPowerPrevention()
+        }
+        .onChange(of: trackedProducts.map { "\($0.id):\($0.isPaused)" }) { _, _ in
+            syncPowerPrevention()
         }
         .onChange(of: menuBarState.manualCheckRequestID) { _, _ in
             startManualCheckAll()
@@ -743,6 +767,7 @@ struct ContentView: View {
                 refreshMenuBarSummary()
                 activeSheet = nil
                 scheduleNextAutomaticCheck()
+                syncPowerPrevention()
                 return true
             }
         }
@@ -817,6 +842,7 @@ struct ContentView: View {
     private func startCheckSequence(for productIDs: [UUID]) {
         guard !isCheckSequenceRunning, !productIDs.isEmpty else { return }
         isCheckSequenceRunning = true
+        syncPowerPrevention()
         stopAutomaticMonitoring()
 
         Task { @MainActor in
@@ -826,6 +852,7 @@ struct ContentView: View {
                 isCheckSequenceRunning = false
                 refreshMenuBarSummary()
                 scheduleNextAutomaticCheck()
+                syncPowerPrevention()
             }
 
             for productID in productIDs {
@@ -856,6 +883,7 @@ struct ContentView: View {
         if selectedProductID == productID {
             selectedProductID = trackedProducts.first?.id ?? UUID()
         }
+        syncPowerPrevention()
     }
 
     private func visibleStatus(for product: TrackedProduct) -> ProductStatus {
@@ -929,6 +957,7 @@ struct ContentView: View {
         TrackedProductStore.save(trackedProducts)
         refreshMenuBarSummary()
         scheduleNextAutomaticCheck()
+        syncPowerPrevention()
     }
 
     private func updateCheckInterval(_ minutes: Int, for productID: UUID) {
@@ -1707,6 +1736,7 @@ private struct SettingsView: View {
     @AppStorage("checkIntervalMinutes") private var checkIntervalMinutes = 1
     @AppStorage("stockNotificationsEnabled") private var stockNotificationsEnabled = true
     @AppStorage("launchAtLoginEnabled") private var launchAtLoginEnabled = false
+    @AppStorage("monitoringPowerMode") private var monitoringPowerMode: MonitoringPowerMode = .allowDisplaySleepKeepMacAwake
     @State private var launchAtLoginMessage: String?
     @State private var showingResetConfirmation = false
 
@@ -1727,6 +1757,23 @@ private struct SettingsView: View {
 
             Section("Bildirimler") {
                 Toggle("Bildirimler", isOn: $stockNotificationsEnabled)
+            }
+
+            Section("Mac Uyku Davranışı") {
+                Picker("İzleme sırasında güç modu", selection: $monitoringPowerMode) {
+                    ForEach(MonitoringPowerMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .accessibilityLabel("Mac Uyku Davranışı")
+
+                Text(monitoringPowerMode.description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Text("Bu ayar yalnızca StockPing aktif olarak ürünleri izlerken uygulanır.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Başlangıç") {
@@ -1817,6 +1864,7 @@ private struct SettingsView: View {
         automaticCheckingEnabled = true
         checkIntervalMinutes = 1
         stockNotificationsEnabled = true
+        monitoringPowerMode = .default
         if launchAtLoginEnabled || SMAppService.mainApp.status == .enabled || SMAppService.mainApp.status == .requiresApproval {
             setLaunchAtLogin(false)
         } else {
