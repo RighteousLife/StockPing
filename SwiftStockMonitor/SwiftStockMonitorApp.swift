@@ -658,6 +658,7 @@ struct ContentView: View {
                     if isChecking {
                         ProgressView()
                             .controlSize(.small)
+                            .frame(width: 16, height: 16)
                     } else {
                         Label("Şimdi Kontrol Et", systemImage: "arrow.clockwise")
                     }
@@ -1002,8 +1003,16 @@ private struct ProductSidebarRow: View {
     let product: TrackedProduct
     let status: ProductStatus
 
+    private var cleanVariantDescription: String {
+        let desc = product.selectedVariant.displayDescription
+        if desc.lowercased().hasPrefix("varyant:") {
+            return desc.dropFirst(8).trimmingCharacters(in: .whitespaces)
+        }
+        return desc
+    }
+
     var body: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: 10) {
             Image(systemName: status.symbol)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(status.color)
@@ -1016,19 +1025,20 @@ private struct ProductSidebarRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 HStack(spacing: 4) {
-                    Text(product.selectedVariant.displayDescription)
+                    Text(cleanVariantDescription)
                         .lineLimit(1)
                         .truncationMode(.tail)
                     Text("·")
                         .foregroundStyle(.tertiary)
                     Text("Her \(ProductCheckInterval.shortTitle(for: product.checkIntervalMinutes))")
                         .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 2)
         .contentShape(Rectangle())
     }
 }
@@ -1124,8 +1134,31 @@ private struct ProductDetailView: View {
                     Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 10) {
                         GridRow {
                             detailLabel("Mağaza")
-                            Text(storeName(for: product))
-                                .font(.callout)
+                            HStack(spacing: 8) {
+                                Text(storeName(for: product))
+                                    .font(.callout)
+
+                                HStack(spacing: 5) {
+                                    if storeConnectionStatus == "Bağlanıyor..." {
+                                        ProgressView()
+                                            .controlSize(.mini)
+                                    } else {
+                                        Circle()
+                                            .fill(storeConnectionStatus == "Bağlandı ✓" ? Color.green : Color.orange)
+                                            .frame(width: 5, height: 5)
+                                    }
+                                    Text(storeConnectionStatus)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                if let storeConnectionError {
+                                    Text("(\(storeConnectionError))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                            }
                         }
                         GridRow {
                             detailLabel("Sonraki kontrol")
@@ -1197,29 +1230,6 @@ private struct ProductDetailView: View {
                     ) {
                         historyContent
                     }
-
-                    // Store connection status at the very bottom
-                    HStack(spacing: 6) {
-                        if storeConnectionStatus == "Bağlanıyor..." {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Circle()
-                                .fill(storeConnectionStatus == "Bağlandı ✓" ? Color.green : Color.orange)
-                                .frame(width: 6, height: 6)
-                        }
-                        Text("Store bağlantısı: \(storeConnectionStatus)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        if let storeConnectionError {
-                            Text("(\(storeConnectionError))")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                    }
-                    .padding(.top, 4)
                 }
                 .frame(maxWidth: 680, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
