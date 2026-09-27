@@ -7,7 +7,7 @@ import Combine
 import Network
 
 private enum ProductListFilter: String, CaseIterable, Identifiable {
-    case all, inStock, outOfStock, checking, error, paused, noGroup
+    case all, inStock, outOfStock, checking, error, paused, priority, noGroup
 
     var id: Self { self }
 
@@ -19,19 +19,21 @@ private enum ProductListFilter: String, CaseIterable, Identifiable {
         case .checking: "Kontrol ediliyor"
         case .error: "Kontrol sorunu"
         case .paused: "Duraklatıldı"
+        case .priority: "Öncelikli"
         case .noGroup: "Grupsuz"
         }
     }
 }
 
 private enum ProductListSort: String, CaseIterable, Identifiable {
-    case defaultOrder, productName, lastChecked, nextCheck
+    case defaultOrder, priorityFirst, productName, lastChecked, nextCheck
 
     var id: Self { self }
 
     var title: String {
         switch self {
         case .defaultOrder: "Varsayılan sıra"
+        case .priorityFirst: "Öncelikliler başta"
         case .productName: "Ürün adı"
         case .lastChecked: "Son kontrol"
         case .nextCheck: "Sonraki kontrol"
@@ -447,6 +449,7 @@ struct ContentView: View {
     @State private var currentTimerGeneration: UUID?
     @State private var pendingCheckContinuation: CheckedContinuation<Void, Never>?
     @State private var checkSequenceTask: Task<Void, Never>?
+    @State private var showingDashboard = false
     @StateObject private var networkMonitor = NetworkReachabilityMonitor.shared
 
     init() {
@@ -507,7 +510,8 @@ struct ContentView: View {
                 storeName(for: product),
                 product.variantTitle,
                 product.group ?? "",
-                product.tags.joined(separator: " ")
+                product.tags.joined(separator: " "),
+                product.note ?? ""
             ]
             let matchesSearch = query.isEmpty || searchTokens.contains { $0.localizedCaseInsensitiveContains(query) }
             let status = visibleStatus(for: product)
@@ -519,6 +523,7 @@ struct ContentView: View {
             case .checking: matchesStatus = status == .checking
             case .error: matchesStatus = status == .error
             case .paused: matchesStatus = status == .paused
+            case .priority: matchesStatus = product.isPriority
             case .noGroup: matchesStatus = (product.group == nil || product.group?.isEmpty == true)
             }
 
@@ -551,6 +556,11 @@ struct ContentView: View {
         return filteredProducts.enumerated().sorted { lhs, rhs in
             switch productListSort {
             case .defaultOrder:
+                return lhs.offset < rhs.offset
+            case .priorityFirst:
+                if lhs.element.isPriority != rhs.element.isPriority {
+                    return lhs.element.isPriority && !rhs.element.isPriority
+                }
                 return lhs.offset < rhs.offset
             case .productName:
                 let comparison = lhs.element.productName.compare(rhs.element.productName, options: [.caseInsensitive], locale: locale)
@@ -661,21 +671,44 @@ struct ContentView: View {
                                 Button("Şimdi Kontrol Et", systemImage: "arrow.clockwise") {
                                     startManualCheck(for: product.id)
                                 }
-                                .disabled(isCheckSequenceRunning || !networkMonitor.canProceedWithChecks)
+                                .disabled(isCheckSequenceRunning || !networkMonitor.canProceedWithChecks || product.isPaused)
+
+                                Button(
+                                    product.isPriority ? "Önceliği Kaldır" : "Öncelikli Yap",
+                                    systemImage: product.isPriority ? "star.slash" : "star"
+                                ) {
+                                    togglePriority(for: product.id)
+                                }
+
                                 Button("Ürün Sayfasını Aç", systemImage: "safari") {
                                     NSWorkspace.shared.open(product.productURL)
                                 }
                                 Button("Ürün URL'sini Kopyala", systemImage: "doc.on.doc") {
                                     copyProductURL(product.productURL)
                                 }
+
+                                if productListSort == .defaultOrder && !isAnyFilterActive {
+                                    Divider()
+                                    Button("Yukarı Taşı", systemImage: "arrow.up") {
+                                        moveProductUp(product.id)
+                                    }
+                                    .disabled(trackedProducts.first?.id == product.id)
+
+                                    Button("Aşağı Taşı", systemImage: "arrow.down") {
+                                        moveProductDown(product.id)
+                                    }
+                                    .disabled(trackedProducts.last?.id == product.id)
+                                }
+
                                 Divider()
                                 Button(
-                                    product.isPaused ? "Takibi Sürdür" : "Takibi Duraklat",
+                                    product.isPaused ? "İzlemeye Devam Et" : "İzlemeyi Duraklat",
                                     systemImage: product.isPaused ? "play.circle" : "pause.circle"
                                 ) {
                                     setPaused(!product.isPaused, for: product.id)
                                 }
                                 .disabled(isCheckSequenceRunning)
+
                                 Divider()
                                 Button("Ürünü Sil", systemImage: "trash", role: .destructive) {
                                     requestProductDeletion([product.id])
@@ -879,7 +912,18 @@ struct ContentView: View {
                 )
                 Divider()
                 Group {
-                    if let selectedProductIndex {
+                    if showingDashboard {
+                        MonitoringDashboardView(
+                            products: trackedProducts,
+                            onSelectProduct: { id in
+                                selectedProductID = id
+                                showingDashboard = false
+                            },
+                            onAddProduct: {
+                                activeSheet = .addProduct
+                            }
+                        )
+                    } else if let selectedProductIndex {
                         ProductDetailView(
                             product: trackedProducts[selectedProductIndex],
                             status: visibleStatus(for: trackedProducts[selectedProductIndex]),
@@ -893,14 +937,28 @@ struct ContentView: View {
                             onIntervalChange: { updateCheckInterval($0, for: trackedProducts[selectedProductIndex].id) },
                             onGroupChange: { updateGroup($0, for: trackedProducts[selectedProductIndex].id) },
                             onAddTag: { addTag($0, for: trackedProducts[selectedProductIndex].id) },
-                            onRemoveTag: { removeTag($0, for: trackedProducts[selectedProductIndex].id) }
+                            onRemoveTag: { removeTag($0, for: trackedProducts[selectedProductIndex].id) },
+                            onTogglePause: { setPaused(!trackedProducts[selectedProductIndex].isPaused, for: trackedProducts[selectedProductIndex].id) },
+                            onTogglePriority: { togglePriority(for: trackedProducts[selectedProductIndex].id) },
+                            onUpdateNote: { updateNote($0, for: trackedProducts[selectedProductIndex].id) },
+                            onToggleMacOSNotification: { toggleMacOSNotification(for: trackedProducts[selectedProductIndex].id) },
+                            onToggleEmailNotification: { toggleEmailNotification(for: trackedProducts[selectedProductIndex].id) }
                         )
                     } else if trackedProducts.isEmpty {
                         EmptyProductsView {
                             activeSheet = .addProduct
                         }
                     } else {
-                        NoSelectionView()
+                        MonitoringDashboardView(
+                            products: trackedProducts,
+                            onSelectProduct: { id in
+                                selectedProductID = id
+                                showingDashboard = false
+                            },
+                            onAddProduct: {
+                                activeSheet = .addProduct
+                            }
+                        )
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -949,6 +1007,13 @@ struct ContentView: View {
                 }
 
                 Button {
+                    showingDashboard.toggle()
+                } label: {
+                    Label("Genel Özet", systemImage: showingDashboard ? "gauge.with.dots.needle.bottom.50percent" : "chart.bar.xaxis")
+                }
+                .help(showingDashboard ? "Ürün görünümüne dön" : "Genel izleme özetini göster")
+
+                Button {
                     activeSheet = .addProduct
                 } label: {
                     Label("Ürün Ekle", systemImage: "plus")
@@ -969,7 +1034,7 @@ struct ContentView: View {
                     }
                 }
                 .help(networkMonitor.canProceedWithChecks ? "Şimdi Kontrol Et (⌘R)" : "Ağ bağlantısı bekleniyor")
-                .disabled(isCheckSequenceRunning || selectedProductIndex == nil || !networkMonitor.canProceedWithChecks)
+                .disabled(isCheckSequenceRunning || selectedProductIndex == nil || !networkMonitor.canProceedWithChecks || (selectedProductIndex.map { trackedProducts[$0].isPaused } ?? false))
                 .keyboardShortcut("r", modifiers: .command)
 
                 Button {
@@ -978,7 +1043,7 @@ struct ContentView: View {
                     Label("Şimdi Tümünü Kontrol Et", systemImage: "arrow.clockwise.circle")
                 }
                 .help(networkMonitor.canProceedWithChecks ? "Şimdi Tümünü Kontrol Et (⇧⌘R)" : "Ağ bağlantısı bekleniyor")
-                .disabled(isCheckSequenceRunning || trackedProducts.isEmpty || !networkMonitor.canProceedWithChecks)
+                .disabled(isCheckSequenceRunning || !trackedProducts.contains(where: { !$0.isPaused }) || !networkMonitor.canProceedWithChecks)
                 .keyboardShortcut("r", modifiers: [.command, .shift])
 
                 Menu {
@@ -1039,6 +1104,7 @@ struct ContentView: View {
             syncPowerPrevention()
         }
         .onChange(of: selectedProductID) { _, _ in
+            showingDashboard = false
             refreshMenuBarSummary()
         }
         .onChange(of: trackedProducts.map(\.id)) { _, currentIDs in
@@ -1258,12 +1324,17 @@ struct ContentView: View {
 
     private func startManualCheck(for productID: UUID) {
         guard networkMonitor.canProceedWithChecks else { return }
+        if let product = trackedProducts.first(where: { $0.id == productID }), product.isPaused {
+            return
+        }
         startCheckSequence(for: [productID])
     }
 
     private func startManualCheckAll() {
         guard networkMonitor.canProceedWithChecks else { return }
-        startCheckSequence(for: trackedProducts.map(\.id))
+        let unpausedIDs = trackedProducts.filter { !$0.isPaused }.map(\.id)
+        guard !unpausedIDs.isEmpty else { return }
+        startCheckSequence(for: unpausedIDs)
     }
 
     private func deleteProduct(_ productID: UUID) {
@@ -1355,6 +1426,42 @@ struct ContentView: View {
         syncPowerPrevention()
     }
 
+    private func moveProductUp(_ productID: UUID) {
+        guard let index = trackedProducts.firstIndex(where: { $0.id == productID }), index > 0 else { return }
+        trackedProducts.swapAt(index, index - 1)
+        TrackedProductStore.save(trackedProducts)
+    }
+
+    private func moveProductDown(_ productID: UUID) {
+        guard let index = trackedProducts.firstIndex(where: { $0.id == productID }), index < trackedProducts.count - 1 else { return }
+        trackedProducts.swapAt(index, index + 1)
+        TrackedProductStore.save(trackedProducts)
+    }
+
+    private func togglePriority(for productID: UUID) {
+        guard let index = trackedProducts.firstIndex(where: { $0.id == productID }) else { return }
+        trackedProducts[index].isPriority.toggle()
+        TrackedProductStore.save(trackedProducts)
+    }
+
+    private func updateNote(_ note: String?, for productID: UUID) {
+        guard let index = trackedProducts.firstIndex(where: { $0.id == productID }) else { return }
+        trackedProducts[index].note = note
+        TrackedProductStore.save(trackedProducts)
+    }
+
+    private func toggleMacOSNotification(for productID: UUID) {
+        guard let index = trackedProducts.firstIndex(where: { $0.id == productID }) else { return }
+        trackedProducts[index].isMacOSNotificationEnabled.toggle()
+        TrackedProductStore.save(trackedProducts)
+    }
+
+    private func toggleEmailNotification(for productID: UUID) {
+        guard let index = trackedProducts.firstIndex(where: { $0.id == productID }) else { return }
+        trackedProducts[index].isEmailNotificationEnabled.toggle()
+        TrackedProductStore.save(trackedProducts)
+    }
+
     private func updateCheckInterval(_ minutes: Int, for productID: UUID) {
         guard let index = trackedProducts.firstIndex(where: { $0.id == productID }) else { return }
         trackedProducts[index].checkIntervalMinutes = minutes
@@ -1439,11 +1546,18 @@ private struct ProductSidebarRow: View {
                 .frame(width: 16)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(product.productName)
-                    .font(.body)
-                    .foregroundStyle(product.isPaused ? .secondary : .primary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                HStack(spacing: 4) {
+                    Text(product.productName)
+                        .font(.body)
+                        .foregroundStyle(product.isPaused ? .secondary : .primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    if product.isPriority {
+                        Image(systemName: "star.fill")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.yellow)
+                    }
+                }
                 HStack(spacing: 4) {
                     if let group = product.group, !group.isEmpty {
                         Text(group)
@@ -1548,6 +1662,13 @@ private struct TagFlowView: View {
     }
 }
 
+private enum HistoryDisplayMode: String, CaseIterable, Identifiable {
+    case stockSessions = "Stok Dönemleri"
+    case allEvents = "Tüm Olaylar"
+
+    var id: Self { self }
+}
+
 private struct ProductDetailView: View {
     @State private var isProductInformationExpanded = true
     @State private var isStockStatisticsExpanded = true
@@ -1560,6 +1681,9 @@ private struct ProductDetailView: View {
     @State private var newGroupName = ""
     @State private var showingNewTagAlert = false
     @State private var newTagName = ""
+    @State private var showingNoteAlert = false
+    @State private var noteDraftText = ""
+    @State private var historyDisplayMode: HistoryDisplayMode = .stockSessions
     @AppStorage("adaptiveMonitoringEnabled") private var adaptiveMonitoringEnabled = false
 
     @ObservedObject private var orgStore = ProductOrganizationStore.shared
@@ -1578,6 +1702,11 @@ private struct ProductDetailView: View {
     let onGroupChange: (String?) -> Void
     let onAddTag: (String) -> Void
     let onRemoveTag: (String) -> Void
+    let onTogglePause: () -> Void
+    let onTogglePriority: () -> Void
+    let onUpdateNote: (String?) -> Void
+    let onToggleMacOSNotification: () -> Void
+    let onToggleEmailNotification: () -> Void
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { timeline in
@@ -1615,6 +1744,22 @@ private struct ProductDetailView: View {
                     HStack(spacing: 10) {
                         Button(action: onOpenProduct) {
                             Label("Ürün Sayfasını Aç", systemImage: "arrow.up.right.square")
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button(action: onTogglePause) {
+                            Label(
+                                product.isPaused ? "İzlemeye Devam Et" : "İzlemeyi Duraklat",
+                                systemImage: product.isPaused ? "play.circle" : "pause.circle"
+                            )
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button(action: onTogglePriority) {
+                            Label(
+                                product.isPriority ? "Önceliği Kaldır" : "Öncelikli Yap",
+                                systemImage: product.isPriority ? "star.slash" : "star"
+                            )
                         }
                         .buttonStyle(.bordered)
 
@@ -1830,6 +1975,73 @@ private struct ProductDetailView: View {
                                 .controlSize(.small)
                             }
                         }
+                        GridRow {
+                            detailLabel("Öncelik")
+                            HStack(spacing: 8) {
+                                Toggle("", isOn: Binding(
+                                    get: { product.isPriority },
+                                    set: { _ in onTogglePriority() }
+                                ))
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                Text(product.isPriority ? "Öncelikli ürün" : "Normal")
+                                    .font(.callout)
+                                    .foregroundStyle(product.isPriority ? .primary : .secondary)
+                            }
+                        }
+                        GridRow(alignment: .top) {
+                            detailLabel("Not")
+                            HStack(alignment: .top, spacing: 8) {
+                                if let note = product.note, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    Text(note)
+                                        .font(.callout)
+                                        .foregroundStyle(.primary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                } else {
+                                    Text("Not eklenmedi")
+                                        .font(.callout)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Button {
+                                    noteDraftText = product.note ?? ""
+                                    showingNoteAlert = true
+                                } label: {
+                                    Image(systemName: "pencil")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Notu Düzenle")
+                            }
+                        }
+                        GridRow {
+                            detailLabel("macOS Bildirimi")
+                            HStack(spacing: 8) {
+                                Toggle("", isOn: Binding(
+                                    get: { product.isMacOSNotificationEnabled },
+                                    set: { _ in onToggleMacOSNotification() }
+                                ))
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                Text(product.isMacOSNotificationEnabled ? "Açık" : "Kapalı")
+                                    .font(.callout)
+                                    .foregroundStyle(product.isMacOSNotificationEnabled ? .primary : .secondary)
+                            }
+                        }
+                        GridRow {
+                            detailLabel("E-posta Bildirimi")
+                            HStack(spacing: 8) {
+                                Toggle("", isOn: Binding(
+                                    get: { product.isEmailNotificationEnabled },
+                                    set: { _ in onToggleEmailNotification() }
+                                ))
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                Text(product.isEmailNotificationEnabled ? "Açık" : "Kapalı")
+                                    .font(.callout)
+                                    .foregroundStyle(product.isEmailNotificationEnabled ? .primary : .secondary)
+                            }
+                        }
                     }
 
                     Divider()
@@ -1922,6 +2134,23 @@ private struct ProductDetailView: View {
             }
             Button("Vazgeç", role: .cancel) {
                 newTagName = ""
+            }
+        }
+        .alert("Ürün Notu", isPresented: $showingNoteAlert) {
+            TextField("Özel not...", text: $noteDraftText)
+            Button("Kaydet") {
+                let trimmed = noteDraftText.trimmingCharacters(in: .whitespacesAndNewlines)
+                onUpdateNote(trimmed.isEmpty ? nil : trimmed)
+                noteDraftText = ""
+            }
+            if product.note != nil {
+                Button("Notu Sil", role: .destructive) {
+                    onUpdateNote(nil)
+                    noteDraftText = ""
+                }
+            }
+            Button("Vazgeç", role: .cancel) {
+                noteDraftText = ""
             }
         }
     }
@@ -2084,41 +2313,136 @@ private struct ProductDetailView: View {
         }
     }
 
+    private struct DisplayStockSession: Identifiable {
+        let id: UUID
+        let startDate: Date
+        let endDate: Date?
+        let isOngoing: Bool
+        let duration: TimeInterval?
+    }
+
+    private var stockSessions: [DisplayStockSession] {
+        var sessions: [DisplayStockSession] = []
+        let stats = product.stockStatistics
+        if let ongoing = stats.ongoingInterval {
+            sessions.append(DisplayStockSession(
+                id: ongoing.id,
+                startDate: ongoing.startDate,
+                endDate: nil,
+                isOngoing: true,
+                duration: nil
+            ))
+        }
+        for interval in stats.completedIntervals.reversed() {
+            sessions.append(DisplayStockSession(
+                id: interval.id,
+                startDate: interval.startDate,
+                endDate: interval.endDate,
+                isOngoing: false,
+                duration: interval.duration
+            ))
+        }
+        return sessions
+    }
+
     @ViewBuilder
     private var historyContent: some View {
-        if groupedEvents.isEmpty {
-            Text("Henüz bir değişiklik yok")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        } else {
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(groupedEvents) { group in
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: group.type.symbol)
-                            .font(.system(size: 13, weight: .regular))
-                            .foregroundStyle(group.type.color)
-                            .frame(width: 16, height: 16)
-                            .padding(.top, 1)
+        VStack(alignment: .leading, spacing: 12) {
+            Picker("", selection: $historyDisplayMode) {
+                ForEach(HistoryDisplayMode.allCases) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
 
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 5) {
-                                Text(group.type.title)
-                                    .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(.primary)
-                                if group.count > 1 {
-                                    Text("(\(group.count) kez)")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+            switch historyDisplayMode {
+            case .stockSessions:
+                if stockSessions.isEmpty {
+                    Text("Henüz stok dönemi kaydedilmedi.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(stockSessions) { session in
+                            HStack(alignment: .top, spacing: 10) {
+                                Circle()
+                                    .fill(Color.green)
+                                    .frame(width: 8, height: 8)
+                                    .padding(.top, 5)
+
+                                VStack(alignment: .leading, spacing: 3) {
+                                    HStack(spacing: 6) {
+                                        Text("Stokta")
+                                            .font(.subheadline.weight(.medium))
+                                            .foregroundStyle(.green)
+
+                                        if session.isOngoing {
+                                            Text("· Devam ediyor")
+                                                .font(.caption.weight(.medium))
+                                                .foregroundStyle(.primary)
+                                        } else if let duration = session.duration {
+                                            Text("· \(StockDurationFormatter.format(seconds: duration))")
+                                                .font(.caption.weight(.medium))
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+
+                                    HStack(spacing: 4) {
+                                        Text(session.startDate.formatted(date: .abbreviated, time: .shortened))
+                                        Text("→")
+                                        if let end = session.endDate {
+                                            Text(end.formatted(date: .omitted, time: .shortened))
+                                        } else {
+                                            Text("Şimdi")
+                                        }
+                                    }
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .help(session.startDate.formatted(date: .long, time: .complete))
                                 }
                             }
-                            Text(TurkishRelativeTime.string(from: group.latestDate))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .help(group.latestDate.formatted(date: .long, time: .complete))
+                            .accessibilityElement(children: .combine)
+                            .accessibilityLabel("Stokta, \(session.startDate.formatted(date: .abbreviated, time: .shortened)) ile \(session.endDate?.formatted(date: .omitted, time: .shortened) ?? "devam ediyor")")
                         }
                     }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("\(group.type.title)\(group.count > 1 ? ", \(group.count) kez" : ""), \(TurkishRelativeTime.string(from: group.latestDate))")
+                }
+            case .allEvents:
+                if groupedEvents.isEmpty {
+                    Text("Henüz bir değişiklik yok")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(groupedEvents) { group in
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: group.type.symbol)
+                                    .font(.system(size: 13, weight: .regular))
+                                    .foregroundStyle(group.type.color)
+                                    .frame(width: 16, height: 16)
+                                    .padding(.top, 1)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 5) {
+                                        Text(group.type.title)
+                                            .font(.subheadline.weight(.medium))
+                                            .foregroundStyle(.primary)
+                                        if group.count > 1 {
+                                            Text("(\(group.count) kez)")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    Text(TurkishRelativeTime.string(from: group.latestDate))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .help(group.latestDate.formatted(date: .long, time: .complete))
+                                }
+                            }
+                            .accessibilityElement(children: .combine)
+                            .accessibilityLabel("\(group.type.title)\(group.count > 1 ? ", \(group.count) kez" : ""), \(TurkishRelativeTime.string(from: group.latestDate))")
+                        }
+                    }
                 }
             }
         }
@@ -2774,6 +3098,186 @@ private struct EmptyProductsView: View {
     }
 }
 
+private struct MonitoringDashboardView: View {
+    let products: [TrackedProduct]
+    let onSelectProduct: (UUID) -> Void
+    let onAddProduct: () -> Void
+
+    private var inStockCount: Int {
+        products.filter { $0.status == .inStock }.count
+    }
+    private var outOfStockCount: Int {
+        products.filter { $0.status == .outOfStock }.count
+    }
+    private var pausedCount: Int {
+        products.filter { $0.isPaused }.count
+    }
+    private var priorityCount: Int {
+        products.filter { $0.isPriority }.count
+    }
+
+    private struct DashboardRecentMovement: Identifiable {
+        let id: UUID
+        let productID: UUID
+        let productName: String
+        let variantTitle: String
+        let storeName: String
+        let isRestock: Bool
+        let date: Date
+    }
+
+    private var recentMovements: [DashboardRecentMovement] {
+        var movements: [DashboardRecentMovement] = []
+        for product in products {
+            let store = storeName(for: product)
+            for event in product.events {
+                if event.type == .stockArrived && event.previousState == false && event.newState == true {
+                    movements.append(DashboardRecentMovement(
+                        id: event.id,
+                        productID: product.id,
+                        productName: product.productName,
+                        variantTitle: product.variantTitle,
+                        storeName: store,
+                        isRestock: true,
+                        date: event.date
+                    ))
+                } else if event.type == .stockDepleted && event.previousState == true && event.newState == false {
+                    movements.append(DashboardRecentMovement(
+                        id: event.id,
+                        productID: product.id,
+                        productName: product.productName,
+                        variantTitle: product.variantTitle,
+                        storeName: store,
+                        isRestock: false,
+                        date: event.date
+                    ))
+                }
+            }
+        }
+        return movements.sorted { $0.date > $1.date }
+    }
+
+    private func storeName(for product: TrackedProduct) -> String {
+        switch product.provider {
+        case .zara: "Zara Türkiye"
+        case .bershka: "Bershka Türkiye"
+        case .pullAndBear: "Pull&Bear Türkiye"
+        case .shopify: product.productURL.host() ?? "Shopify mağazası"
+        }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                // Header
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Genel İzleme Özeti")
+                        .font(.title2.weight(.bold))
+                    Text("Takip edilen mağazalar, ürün sayıları ve anlık durumlar")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                // Summary metric cards
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 120, maximum: 160), spacing: 12)], spacing: 12) {
+                    dashboardCard(title: "Toplam Ürün", value: "\(products.count)", icon: "shippingbox", color: .accentColor)
+                    dashboardCard(title: "Stokta", value: "\(inStockCount)", icon: "checkmark.circle.fill", color: .green)
+                    dashboardCard(title: "Stokta Değil", value: "\(outOfStockCount)", icon: "xmark.circle.fill", color: .orange)
+                    dashboardCard(title: "Duraklatıldı", value: "\(pausedCount)", icon: "pause.circle.fill", color: .secondary)
+                    dashboardCard(title: "Öncelikli", value: "\(priorityCount)", icon: "star.fill", color: .yellow)
+                }
+
+                Divider()
+
+                // Recent stock movements section
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Label("Son Stok Hareketleri", systemImage: "clock.arrow.circlepath")
+                            .font(.headline)
+                        Spacer()
+                        if !recentMovements.isEmpty {
+                            Text("\(min(recentMovements.count, 20)) hareket")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if recentMovements.isEmpty {
+                        VStack(spacing: 8) {
+                            Text("Henüz kaydedilmiş stok hareketi bulunmuyor.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                            Text("Ürünler takip edildikçe ve stok durumları değiştikçe burada listelenecektir.")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.vertical, 16)
+                    } else {
+                        VStack(spacing: 8) {
+                            ForEach(recentMovements.prefix(20)) { movement in
+                                HStack(spacing: 12) {
+                                    Image(systemName: movement.isRestock ? "arrow.up.circle.fill" : "arrow.down.circle.fill")
+                                        .font(.title3)
+                                        .foregroundStyle(movement.isRestock ? Color.green : Color.orange)
+
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(movement.productName)
+                                            .font(.body.weight(.medium))
+                                            .lineLimit(1)
+
+                                        HStack(spacing: 6) {
+                                            Text(movement.storeName)
+                                            Text("·")
+                                            Text(movement.variantTitle)
+                                            Text("·")
+                                            Text(TurkishRelativeTime.string(from: movement.date))
+                                        }
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    }
+
+                                    Spacer()
+
+                                    Button("Ürüne Git") {
+                                        onSelectProduct(movement.productID)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(28)
+            .frame(maxWidth: 800, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private func dashboardCard(title: String, value: String, icon: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: icon)
+                    .foregroundStyle(color)
+                    .font(.subheadline)
+                Spacer()
+            }
+            Text(value)
+                .font(.title.weight(.bold))
+                .foregroundStyle(.primary)
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
 private struct NoSelectionView: View {
     var body: some View {
         ContentUnavailableView {
@@ -3128,7 +3632,7 @@ private struct StorePageWebView: NSViewRepresentable {
 
                     if case .restocked = transition {
                         let current = self.product.wrappedValue
-                        if self.notificationsEnabled {
+                        if self.notificationsEnabled && current.isMacOSNotificationEnabled {
                             StockNotificationManager.shared.sendRestockNotification(
                                 productID: current.id,
                                 productName: current.productName,
@@ -3136,27 +3640,33 @@ private struct StorePageWebView: NSViewRepresentable {
                                 productURL: current.productURL
                             )
                         } else {
+                            let reason = !self.notificationsEnabled
+                                ? "macOS bildirimleri ayarlarda kapalı"
+                                : "Bu ürün için macOS bildirimi kapalı"
                             NotificationAuditManager.shared.record(
                                 productID: current.id,
                                 productName: current.productName,
                                 variantTitle: current.variantTitle,
                                 channel: .macOS,
                                 status: .skipped,
-                                message: "macOS bildirimleri ayarlarda kapalı"
+                                message: reason
                             )
                         }
-                        if self.emailNotificationsEnabled {
+                        if self.emailNotificationsEnabled && current.isEmailNotificationEnabled {
                             EmailNotificationService.shared.sendRestockNotification(
                                 for: current
                             )
                         } else {
+                            let reason = !self.emailNotificationsEnabled
+                                ? "E-posta bildirimleri ayarlarda kapalı"
+                                : "Bu ürün için e-posta bildirimi kapalı"
                             NotificationAuditManager.shared.record(
                                 productID: current.id,
                                 productName: current.productName,
                                 variantTitle: current.variantTitle,
                                 channel: .email,
                                 status: .skipped,
-                                message: "E-posta bildirimleri ayarlarda kapalı"
+                                message: reason
                             )
                         }
                     }

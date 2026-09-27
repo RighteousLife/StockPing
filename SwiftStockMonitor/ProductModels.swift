@@ -271,6 +271,10 @@ struct TrackedProduct: Identifiable {
     var tags: [String] = []
     var consecutiveUnchangedChecks: Int = 0
     var consecutiveFailureChecks: Int = 0
+    var isPriority: Bool = false
+    var note: String? = nil
+    var isMacOSNotificationEnabled: Bool = true
+    var isEmailNotificationEnabled: Bool = true
 
     var variantID: String { selectedVariant.id }
     var variantTitle: String { selectedVariant.displayTitle ?? "Tek seçenek" }
@@ -411,6 +415,10 @@ private struct SavedTrackedProduct: Codable {
     let tags: [String]
     let consecutiveUnchangedChecks: Int
     let consecutiveFailureChecks: Int
+    let isPriority: Bool
+    let note: String?
+    let isMacOSNotificationEnabled: Bool
+    let isEmailNotificationEnabled: Bool
 
     init(_ product: TrackedProduct) {
         id = product.id
@@ -432,6 +440,10 @@ private struct SavedTrackedProduct: Codable {
         tags = product.tags
         consecutiveUnchangedChecks = product.consecutiveUnchangedChecks
         consecutiveFailureChecks = product.consecutiveFailureChecks
+        isPriority = product.isPriority
+        note = product.note
+        isMacOSNotificationEnabled = product.isMacOSNotificationEnabled
+        isEmailNotificationEnabled = product.isEmailNotificationEnabled
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -440,6 +452,7 @@ private struct SavedTrackedProduct: Codable {
         case provider, zaraMetadata, bershkaMetadata, pullAndBearMetadata, events, latestDiagnostic
         case group, tags
         case consecutiveUnchangedChecks, consecutiveFailureChecks
+        case isPriority, note, isMacOSNotificationEnabled, isEmailNotificationEnabled
         // Fields written by trackedProducts.v1 before SelectedVariant was introduced.
         case variantID, variantTitle, lastKnownAvailable, status, options
     }
@@ -479,6 +492,10 @@ private struct SavedTrackedProduct: Codable {
         tags = try values.decodeIfPresent([String].self, forKey: .tags) ?? []
         consecutiveUnchangedChecks = try values.decodeIfPresent(Int.self, forKey: .consecutiveUnchangedChecks) ?? 0
         consecutiveFailureChecks = try values.decodeIfPresent(Int.self, forKey: .consecutiveFailureChecks) ?? 0
+        isPriority = try values.decodeIfPresent(Bool.self, forKey: .isPriority) ?? false
+        note = try values.decodeIfPresent(String.self, forKey: .note)
+        isMacOSNotificationEnabled = try values.decodeIfPresent(Bool.self, forKey: .isMacOSNotificationEnabled) ?? true
+        isEmailNotificationEnabled = try values.decodeIfPresent(Bool.self, forKey: .isEmailNotificationEnabled) ?? true
     }
 
     func encode(to encoder: Encoder) throws {
@@ -507,6 +524,18 @@ private struct SavedTrackedProduct: Codable {
         }
         if consecutiveFailureChecks > 0 {
             try values.encode(consecutiveFailureChecks, forKey: .consecutiveFailureChecks)
+        }
+        if isPriority {
+            try values.encode(isPriority, forKey: .isPriority)
+        }
+        if let note, !note.isEmpty {
+            try values.encode(note, forKey: .note)
+        }
+        if !isMacOSNotificationEnabled {
+            try values.encode(isMacOSNotificationEnabled, forKey: .isMacOSNotificationEnabled)
+        }
+        if !isEmailNotificationEnabled {
+            try values.encode(isEmailNotificationEnabled, forKey: .isEmailNotificationEnabled)
         }
     }
 }
@@ -565,7 +594,11 @@ private extension SavedTrackedProduct {
             group: group,
             tags: tags,
             consecutiveUnchangedChecks: consecutiveUnchangedChecks,
-            consecutiveFailureChecks: consecutiveFailureChecks
+            consecutiveFailureChecks: consecutiveFailureChecks,
+            isPriority: isPriority,
+            note: note,
+            isMacOSNotificationEnabled: isMacOSNotificationEnabled,
+            isEmailNotificationEnabled: isEmailNotificationEnabled
         )
     }
 }

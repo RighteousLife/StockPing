@@ -24,6 +24,10 @@ struct StockPingExportProduct: Codable {
     var pullAndBearMetadata: PullAndBearVariantMetadata?
     var group: String?
     var tags: [String]
+    var isPriority: Bool?
+    var note: String?
+    var isMacOSNotificationEnabled: Bool?
+    var isEmailNotificationEnabled: Bool?
 
     init(from product: TrackedProduct) {
         self.id = product.id
@@ -38,6 +42,10 @@ struct StockPingExportProduct: Codable {
         self.pullAndBearMetadata = product.pullAndBearMetadata
         self.group = product.group
         self.tags = product.tags
+        self.isPriority = product.isPriority ? true : nil
+        self.note = product.note
+        self.isMacOSNotificationEnabled = product.isMacOSNotificationEnabled ? nil : false
+        self.isEmailNotificationEnabled = product.isEmailNotificationEnabled ? nil : false
     }
 
     var trackedProduct: TrackedProduct {
@@ -59,7 +67,13 @@ struct StockPingExportProduct: Codable {
             events: [],
             latestDiagnostic: nil,
             group: group,
-            tags: tags
+            tags: tags,
+            consecutiveUnchangedChecks: 0,
+            consecutiveFailureChecks: 0,
+            isPriority: isPriority ?? false,
+            note: note,
+            isMacOSNotificationEnabled: isMacOSNotificationEnabled ?? true,
+            isEmailNotificationEnabled: isEmailNotificationEnabled ?? true
         )
     }
 }
