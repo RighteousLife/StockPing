@@ -1312,7 +1312,7 @@ struct ContentView: View {
                     print("[NetworkGuard] Sıra sırasında ağ kesintisi tespit edildi, kalan kontroller ertelendi.")
                     break
                 }
-                guard trackedProducts.contains(where: { $0.id == productID }) else { continue }
+                guard let product = trackedProducts.first(where: { $0.id == productID }), !product.isPaused else { continue }
                 await performCheck(for: productID)
             }
         }
@@ -1465,6 +1465,10 @@ struct ContentView: View {
     private func updateCheckInterval(_ minutes: Int, for productID: UUID) {
         guard let index = trackedProducts.firstIndex(where: { $0.id == productID }) else { return }
         trackedProducts[index].checkIntervalMinutes = minutes
+        guard !trackedProducts[index].isPaused else {
+            TrackedProductStore.save(trackedProducts)
+            return
+        }
         let effectiveMinutes = AdaptiveMonitoringPolicy.effectiveIntervalMinutes(
             baseMinutes: minutes,
             status: trackedProducts[index].status,
@@ -3797,16 +3801,20 @@ private struct StorePageWebView: NSViewRepresentable {
             if !deferNextCheckIfNetworkError {
                 let checkedAt = Date()
                 product.wrappedValue.lastChecked = checkedAt
-                let effectiveMinutes = AdaptiveMonitoringPolicy.effectiveIntervalMinutes(
-                    baseMinutes: product.wrappedValue.checkIntervalMinutes,
-                    status: product.wrappedValue.status,
-                    consecutiveUnchangedChecks: product.wrappedValue.consecutiveUnchangedChecks,
-                    consecutiveFailureChecks: product.wrappedValue.consecutiveFailureChecks,
-                    isEnabled: adaptiveMonitoringEnabled
-                )
-                product.wrappedValue.nextCheckDate = checkedAt.addingTimeInterval(
-                    TimeInterval(effectiveMinutes * 60)
-                )
+                if product.wrappedValue.isPaused {
+                    product.wrappedValue.nextCheckDate = nil
+                } else {
+                    let effectiveMinutes = AdaptiveMonitoringPolicy.effectiveIntervalMinutes(
+                        baseMinutes: product.wrappedValue.checkIntervalMinutes,
+                        status: product.wrappedValue.status,
+                        consecutiveUnchangedChecks: product.wrappedValue.consecutiveUnchangedChecks,
+                        consecutiveFailureChecks: product.wrappedValue.consecutiveFailureChecks,
+                        isEnabled: adaptiveMonitoringEnabled
+                    )
+                    product.wrappedValue.nextCheckDate = checkedAt.addingTimeInterval(
+                        TimeInterval(effectiveMinutes * 60)
+                    )
+                }
             }
             checksCompleted += 1
             // Periodically clear WKWebView caches to prevent memory growth
