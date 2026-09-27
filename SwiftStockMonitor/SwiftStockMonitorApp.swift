@@ -306,6 +306,18 @@ struct ContentView: View {
         )
     }
 
+    private var activeMonitoredProductsCount: Int {
+        trackedProducts.filter { !$0.isPaused }.count
+    }
+
+    private var earliestNextCheckDate: Date? {
+        let active = trackedProducts.filter { !$0.isPaused }
+        if active.contains(where: { $0.nextCheckDate == nil }) {
+            return Date.distantPast
+        }
+        return active.compactMap(\.nextCheckDate).min()
+    }
+
     private var selectedProductIndex: Int? {
         trackedProducts.firstIndex { $0.id == selectedProductID }
     }
@@ -557,27 +569,38 @@ struct ContentView: View {
             }
             .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
         } detail: {
-            Group {
-                if let selectedProductIndex {
-                    ProductDetailView(
-                        product: trackedProducts[selectedProductIndex],
-                        status: visibleStatus(for: trackedProducts[selectedProductIndex]),
-                        storeConnectionStatus: storeConnectionStatus,
-                        storeConnectionError: storeConnectionError,
-                        automaticCheckingEnabled: automaticCheckingEnabled,
-                        canDelete: !isCheckSequenceRunning,
-                        canChangeInterval: !isCheckSequenceRunning,
-                        onOpenProduct: { NSWorkspace.shared.open(trackedProducts[selectedProductIndex].productURL) },
-                        onDelete: { requestProductDeletion([trackedProducts[selectedProductIndex].id]) },
-                        onIntervalChange: { updateCheckInterval($0, for: trackedProducts[selectedProductIndex].id) }
-                    )
-                } else {
-                    EmptyProductsView {
-                        activeSheet = .addProduct
+            VStack(spacing: 0) {
+                GlobalMonitoringStatusBar(
+                    automaticCheckingEnabled: automaticCheckingEnabled,
+                    isCheckSequenceRunning: isCheckSequenceRunning,
+                    activeProductCount: activeMonitoredProductsCount,
+                    totalProductCount: trackedProducts.count,
+                    nextCheckDate: earliestNextCheckDate,
+                    powerMode: monitoringPowerMode
+                )
+                Divider()
+                Group {
+                    if let selectedProductIndex {
+                        ProductDetailView(
+                            product: trackedProducts[selectedProductIndex],
+                            status: visibleStatus(for: trackedProducts[selectedProductIndex]),
+                            storeConnectionStatus: storeConnectionStatus,
+                            storeConnectionError: storeConnectionError,
+                            automaticCheckingEnabled: automaticCheckingEnabled,
+                            canDelete: !isCheckSequenceRunning,
+                            canChangeInterval: !isCheckSequenceRunning,
+                            onOpenProduct: { NSWorkspace.shared.open(trackedProducts[selectedProductIndex].productURL) },
+                            onDelete: { requestProductDeletion([trackedProducts[selectedProductIndex].id]) },
+                            onIntervalChange: { updateCheckInterval($0, for: trackedProducts[selectedProductIndex].id) }
+                        )
+                    } else {
+                        EmptyProductsView {
+                            activeSheet = .addProduct
+                        }
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
@@ -1328,6 +1351,217 @@ private struct ProductDetailView: View {
         case .bershka: "Bershka Türkiye"
         case .pullAndBear: "Pull&Bear Türkiye"
         case .shopify: product.productURL.host() ?? "Shopify mağazası"
+        }
+    }
+}
+
+private struct GlobalMonitoringStatusBar: View {
+    let automaticCheckingEnabled: Bool
+    let isCheckSequenceRunning: Bool
+    let activeProductCount: Int
+    let totalProductCount: Int
+    let nextCheckDate: Date?
+    let powerMode: MonitoringPowerMode
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { timeline in
+            barContent(at: timeline.date)
+        }
+    }
+
+    @ViewBuilder
+    private func barContent(at now: Date) -> some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                statusIndicator
+                statusTitleView
+            }
+
+            Spacer(minLength: 8)
+
+            HStack(spacing: 10) {
+                if !isCheckSequenceRunning && automaticCheckingEnabled && activeProductCount > 0 {
+                    HStack(spacing: 5) {
+                        Image(systemName: "clock")
+                            .foregroundStyle(.secondary)
+                        Text("Sonraki kontrol: \(countdownString(at: now))")
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.caption)
+                }
+
+                powerBadge
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(.bar)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilitySummary(at: now))
+    }
+
+    @ViewBuilder
+    private var statusIndicator: some View {
+        if isCheckSequenceRunning {
+            ProgressView()
+                .controlSize(.small)
+        } else if !automaticCheckingEnabled {
+            Image(systemName: "pause.circle.fill")
+                .foregroundStyle(.orange)
+                .imageScale(.medium)
+        } else if activeProductCount == 0 {
+            Image(systemName: "minus.circle.fill")
+                .foregroundStyle(.secondary)
+                .imageScale(.medium)
+        } else {
+            Circle()
+                .fill(Color.green)
+                .frame(width: 8, height: 8)
+        }
+    }
+
+    @ViewBuilder
+    private var statusTitleView: some View {
+        if isCheckSequenceRunning {
+            HStack(spacing: 6) {
+                Text("Kontrol ediliyor…")
+                    .font(.callout.weight(.medium))
+                if activeProductCount > 0 {
+                    Text("·")
+                        .foregroundStyle(.secondary)
+                    Text("\(activeProductCount) aktif ürün")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } else if !automaticCheckingEnabled {
+            HStack(spacing: 6) {
+                Text("İzleme duraklatıldı")
+                    .font(.callout.weight(.medium))
+                Text("·")
+                    .foregroundStyle(.secondary)
+                Text("Otomatik kontrol kapalı")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        } else if activeProductCount == 0 {
+            HStack(spacing: 6) {
+                Text("İzlenecek aktif ürün yok")
+                    .font(.callout.weight(.medium))
+                if totalProductCount > 0 {
+                    Text("·")
+                        .foregroundStyle(.secondary)
+                    Text("Tüm ürünler duraklatıldı")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } else {
+            HStack(spacing: 6) {
+                Text("İzleme Aktif")
+                    .font(.callout.weight(.medium))
+                Text("·")
+                    .foregroundStyle(.secondary)
+                Text("\(activeProductCount) ürün takip ediliyor")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var isPowerProtectionActive: Bool {
+        (automaticCheckingEnabled && activeProductCount > 0) || isCheckSequenceRunning
+    }
+
+    @ViewBuilder
+    private var powerBadge: some View {
+        if isPowerProtectionActive {
+            HStack(spacing: 5) {
+                Image(systemName: powerSymbol)
+                    .foregroundStyle(powerColor)
+                Text(powerText)
+                    .foregroundStyle(.primary)
+            }
+            .font(.caption)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Color.secondary.opacity(0.12), in: Capsule())
+            .help(powerHelp)
+        } else {
+            HStack(spacing: 5) {
+                Image(systemName: "powersleep")
+                    .foregroundStyle(.secondary)
+                Text("Uyku engelleme pasif")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Color.secondary.opacity(0.08), in: Capsule())
+            .help("İzleme aktif olmadığında Mac uyku koruması devrede değildir.")
+        }
+    }
+
+    private var powerSymbol: String {
+        switch powerMode {
+        case .normal: "leaf"
+        case .keepMacAndDisplayAwake: "sun.max.fill"
+        case .allowDisplaySleepKeepMacAwake: "display"
+        }
+    }
+
+    private var powerColor: Color {
+        switch powerMode {
+        case .normal: .secondary
+        case .keepMacAndDisplayAwake: .orange
+        case .allowDisplaySleepKeepMacAwake: .accentColor
+        }
+    }
+
+    private var powerText: String {
+        switch powerMode {
+        case .normal: "macOS uyku yönetimi"
+        case .keepMacAndDisplayAwake: "Mac + ekran uyanık"
+        case .allowDisplaySleepKeepMacAwake: "Mac uyanık · ekran kapanabilir"
+        }
+    }
+
+    private var powerHelp: String {
+        switch powerMode {
+        case .normal:
+            "macOS ekran ve sistem uykusunu normal şekilde yönetir."
+        case .keepMacAndDisplayAwake:
+            "İzleme sırasında Mac'in ve ekranın uykuya geçmesi engellenir."
+        case .allowDisplaySleepKeepMacAwake:
+            "Ekran kapanabilir; Mac uyumaz ve ürün stok takibi devam eder."
+        }
+    }
+
+    private func countdownString(at now: Date) -> String {
+        guard let nextCheckDate else {
+            return "Planlanmadı"
+        }
+        let seconds = Int(nextCheckDate.timeIntervalSince(now).rounded(.up))
+        guard seconds > 0 else {
+            return "Kontrol sırada"
+        }
+        if seconds < 60 {
+            return "\(seconds) sn"
+        }
+        let minutes = seconds / 60
+        let remainder = seconds % 60
+        return remainder == 0 ? "\(minutes) dk" : "\(minutes) dk \(remainder) sn"
+    }
+
+    private func accessibilitySummary(at now: Date) -> String {
+        if isCheckSequenceRunning {
+            return "Stok kontrolü yapılıyor. \(activeProductCount) aktif ürün."
+        } else if !automaticCheckingEnabled {
+            return "İzleme duraklatıldı. Otomatik kontrol kapalı. Uyku koruması pasif."
+        } else if activeProductCount == 0 {
+            return "İzlenecek aktif ürün yok. Uyku koruması pasif."
+        } else {
+            return "İzleme aktif. \(activeProductCount) ürün takip ediliyor. Sonraki kontrol \(countdownString(at: now)). Güç koruması: \(powerText)."
         }
     }
 }
