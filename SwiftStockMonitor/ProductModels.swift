@@ -269,6 +269,8 @@ struct TrackedProduct: Identifiable {
     var latestDiagnostic: ProviderDiagnostic? = nil
     var group: String? = nil
     var tags: [String] = []
+    var consecutiveUnchangedChecks: Int = 0
+    var consecutiveFailureChecks: Int = 0
 
     var variantID: String { selectedVariant.id }
     var variantTitle: String { selectedVariant.displayTitle ?? "Tek seçenek" }
@@ -290,6 +292,60 @@ struct TrackedProduct: Identifiable {
         if events.count > 50 {
             events.removeFirst(events.count - 50)
         }
+    }
+
+    func isDuplicate(of other: TrackedProduct) -> Bool {
+        guard provider == other.provider else { return false }
+        if provider == .zara,
+           let m1 = zaraMetadata,
+           let m2 = other.zaraMetadata {
+            return m1.productGroupID == m2.productGroupID &&
+                   m1.colorProductID == m2.colorProductID &&
+                   m1.availabilitySKU == m2.availabilitySKU
+        }
+        if provider == .bershka,
+           let m1 = bershkaMetadata,
+           let m2 = other.bershkaMetadata {
+            return m1.productID == m2.productID &&
+                   m1.colorID == m2.colorID &&
+                   m1.sku == m2.sku
+        }
+        if provider == .pullAndBear,
+           let m1 = pullAndBearMetadata,
+           let m2 = other.pullAndBearMetadata {
+            return m1.productCode == m2.productCode &&
+                   m1.colorIdentity == m2.colorIdentity &&
+                   m1.sizeName.caseInsensitiveCompare(m2.sizeName) == .orderedSame
+        }
+        return ShopifyChecker.productIdentity(for: productURL) == ShopifyChecker.productIdentity(for: other.productURL) &&
+               variantID == other.variantID
+    }
+
+    func matches(candidate: StoreVariantCandidate, productURL: URL, provider: StoreProvider) -> Bool {
+        guard self.provider == provider else { return false }
+        if provider == .zara,
+           let m1 = zaraMetadata,
+           let m2 = candidate.zaraMetadata {
+            return m1.productGroupID == m2.productGroupID &&
+                   m1.colorProductID == m2.colorProductID &&
+                   m1.availabilitySKU == m2.availabilitySKU
+        }
+        if provider == .bershka,
+           let m1 = bershkaMetadata,
+           let m2 = candidate.bershkaMetadata {
+            return m1.productID == m2.productID &&
+                   m1.colorID == m2.colorID &&
+                   m1.sku == m2.sku
+        }
+        if provider == .pullAndBear,
+           let m1 = pullAndBearMetadata,
+           let m2 = candidate.pullAndBearMetadata {
+            return m1.productCode == m2.productCode &&
+                   m1.colorIdentity == m2.colorIdentity &&
+                   m1.sizeName.caseInsensitiveCompare(m2.sizeName) == .orderedSame
+        }
+        return ShopifyChecker.productIdentity(for: self.productURL) == ShopifyChecker.productIdentity(for: productURL) &&
+               variantID == candidate.variant.id
     }
 
     static let reflectedLightVinyl = TrackedProduct(
@@ -344,6 +400,8 @@ private struct SavedTrackedProduct: Codable {
     let latestDiagnostic: ProviderDiagnostic?
     let group: String?
     let tags: [String]
+    let consecutiveUnchangedChecks: Int
+    let consecutiveFailureChecks: Int
 
     init(_ product: TrackedProduct) {
         id = product.id
@@ -363,6 +421,8 @@ private struct SavedTrackedProduct: Codable {
         latestDiagnostic = product.latestDiagnostic
         group = product.group
         tags = product.tags
+        consecutiveUnchangedChecks = product.consecutiveUnchangedChecks
+        consecutiveFailureChecks = product.consecutiveFailureChecks
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -370,6 +430,7 @@ private struct SavedTrackedProduct: Codable {
         case checkIntervalMinutes, nextCheckDate, isPaused, lastCheckError
         case provider, zaraMetadata, bershkaMetadata, pullAndBearMetadata, events, latestDiagnostic
         case group, tags
+        case consecutiveUnchangedChecks, consecutiveFailureChecks
         // Fields written by trackedProducts.v1 before SelectedVariant was introduced.
         case variantID, variantTitle, lastKnownAvailable, status, options
     }
@@ -407,6 +468,8 @@ private struct SavedTrackedProduct: Codable {
         latestDiagnostic = try values.decodeIfPresent(ProviderDiagnostic.self, forKey: .latestDiagnostic)
         group = try values.decodeIfPresent(String.self, forKey: .group)
         tags = try values.decodeIfPresent([String].self, forKey: .tags) ?? []
+        consecutiveUnchangedChecks = try values.decodeIfPresent(Int.self, forKey: .consecutiveUnchangedChecks) ?? 0
+        consecutiveFailureChecks = try values.decodeIfPresent(Int.self, forKey: .consecutiveFailureChecks) ?? 0
     }
 
     func encode(to encoder: Encoder) throws {
@@ -429,6 +492,12 @@ private struct SavedTrackedProduct: Codable {
         try values.encodeIfPresent(group, forKey: .group)
         if !tags.isEmpty {
             try values.encode(tags, forKey: .tags)
+        }
+        if consecutiveUnchangedChecks > 0 {
+            try values.encode(consecutiveUnchangedChecks, forKey: .consecutiveUnchangedChecks)
+        }
+        if consecutiveFailureChecks > 0 {
+            try values.encode(consecutiveFailureChecks, forKey: .consecutiveFailureChecks)
         }
     }
 }
@@ -485,7 +554,9 @@ private extension SavedTrackedProduct {
             events: events,
             latestDiagnostic: latestDiagnostic,
             group: group,
-            tags: tags
+            tags: tags,
+            consecutiveUnchangedChecks: consecutiveUnchangedChecks,
+            consecutiveFailureChecks: consecutiveFailureChecks
         )
     }
 }
@@ -515,3 +586,66 @@ enum ProductCheckInterval {
         }
     }
 }
+
+struct AdaptiveMonitoringPolicy: Sendable {
+    static let maxAdaptiveIntervalMinutes: Int = 30
+
+    static func effectiveIntervalMinutes(
+        baseMinutes: Int,
+        status: ProductStatus,
+        consecutiveUnchangedChecks: Int,
+        consecutiveFailureChecks: Int,
+        isEnabled: Bool
+    ) -> Int {
+        guard isEnabled else { return baseMinutes }
+
+        // Progressive backoff for repeated check failures
+        if consecutiveFailureChecks >= 5 {
+            return min(maxAdaptiveIntervalMinutes, max(baseMinutes * 3, 15))
+        } else if consecutiveFailureChecks >= 3 {
+            return min(maxAdaptiveIntervalMinutes, baseMinutes * 2)
+        }
+
+        // Only scale back checking for confirmed out-of-stock products
+        guard status == .outOfStock else { return baseMinutes }
+
+        // Tier 2: 9 or more consecutive unchanged out-of-stock checks
+        if consecutiveUnchangedChecks >= 9 {
+            if baseMinutes <= 2 {
+                return min(maxAdaptiveIntervalMinutes, baseMinutes * 4)
+            } else {
+                return min(maxAdaptiveIntervalMinutes, max(baseMinutes + 10, baseMinutes * 2))
+            }
+        }
+        // Tier 1: 4 to 8 consecutive unchanged out-of-stock checks
+        else if consecutiveUnchangedChecks >= 4 {
+            if baseMinutes <= 2 {
+                return min(maxAdaptiveIntervalMinutes, baseMinutes * 2)
+            } else {
+                return min(maxAdaptiveIntervalMinutes, max(baseMinutes + 5, (baseMinutes * 3) / 2))
+            }
+        }
+
+        // Tier 0: < 4 unchanged checks
+        return baseMinutes
+    }
+
+    static func reason(
+        baseMinutes: Int,
+        effectiveMinutes: Int,
+        status: ProductStatus,
+        consecutiveUnchangedChecks: Int,
+        consecutiveFailureChecks: Int,
+        isEnabled: Bool
+    ) -> String? {
+        guard isEnabled, effectiveMinutes != baseMinutes else { return nil }
+        if consecutiveFailureChecks >= 3 {
+            return "Arka arkaya \(consecutiveFailureChecks) kontrol başarısız olduğu için istek sıklığı azaltıldı (\(effectiveMinutes) dk)."
+        }
+        if status == .outOfStock && consecutiveUnchangedChecks >= 4 {
+            return "Ürün \(consecutiveUnchangedChecks) kontroldür stokta olmadığı için kontrol sıklığı akıllı olarak azaltıldı (\(effectiveMinutes) dk)."
+        }
+        return "Akıllı kontrol aralığı etkin (\(effectiveMinutes) dk)."
+    }
+}
+

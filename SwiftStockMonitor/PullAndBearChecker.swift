@@ -91,7 +91,7 @@ enum PullAndBearChecker {
                 id: "pullandbear:\(code):\(colorIdentity):\(name)",
                 title: "\(colorName) / \(name)",
                 options: colorOptions + [VariantOption(name: "Beden", value: name)],
-                availability: nil
+                availability: available
             )
             return StoreVariantCandidate(
                 variant: variant,

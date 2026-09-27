@@ -422,6 +422,7 @@ struct ContentView: View {
     @AppStorage("stockNotificationsEnabled") private var stockNotificationsEnabled = true
     @AppStorage("emailNotificationsEnabled") private var emailNotificationsEnabled = false
     @AppStorage("monitoringPowerMode") private var monitoringPowerMode: MonitoringPowerMode = .allowDisplaySleepKeepMacAwake
+    @AppStorage("adaptiveMonitoringEnabled") private var adaptiveMonitoringEnabled = false
     @State private var trackedProducts: [TrackedProduct]
     @State private var selectedProductID: UUID
     @State private var isSelectionMode = false
@@ -1014,6 +1015,7 @@ struct ContentView: View {
                     errorMessage: $storeConnectionError,
                     notificationsEnabled: stockNotificationsEnabled,
                     emailNotificationsEnabled: emailNotificationsEnabled,
+                    adaptiveMonitoringEnabled: adaptiveMonitoringEnabled,
                     onCheckComplete: completeCurrentCheck
                 )
                 .frame(
@@ -1065,6 +1067,22 @@ struct ContentView: View {
         .onChange(of: checkIntervalMinutes) { _, _ in
             // This setting only supplies the initial interval for products added later.
         }
+        .onChange(of: adaptiveMonitoringEnabled) { _, isEnabled in
+            for index in trackedProducts.indices where !trackedProducts[index].isPaused {
+                if let last = trackedProducts[index].lastChecked {
+                    let effectiveMinutes = AdaptiveMonitoringPolicy.effectiveIntervalMinutes(
+                        baseMinutes: trackedProducts[index].checkIntervalMinutes,
+                        status: trackedProducts[index].status,
+                        consecutiveUnchangedChecks: trackedProducts[index].consecutiveUnchangedChecks,
+                        consecutiveFailureChecks: trackedProducts[index].consecutiveFailureChecks,
+                        isEnabled: isEnabled
+                    )
+                    trackedProducts[index].nextCheckDate = last.addingTimeInterval(TimeInterval(effectiveMinutes * 60))
+                }
+            }
+            TrackedProductStore.save(trackedProducts)
+            scheduleNextAutomaticCheck()
+        }
         .onChange(of: monitoringPowerMode) { _, _ in
             syncPowerPrevention()
         }
@@ -1085,44 +1103,35 @@ struct ContentView: View {
             }
         }
         .sheet(item: $activeSheet) { _ in
-            AddProductSheet(defaultIntervalMinutes: checkIntervalMinutes) { newProduct in
-                let identity = ShopifyChecker.productIdentity(for: newProduct.productURL)
-                let alreadyTracked = trackedProducts.contains { existing in
-                    if existing.provider != newProduct.provider { return false }
-                    if newProduct.provider == .zara,
-                       let oldZara = existing.zaraMetadata,
-                       let newZara = newProduct.zaraMetadata {
-                        return oldZara.productGroupID == newZara.productGroupID &&
-                            oldZara.colorProductID == newZara.colorProductID &&
-                            oldZara.availabilitySKU == newZara.availabilitySKU
-                    }
-                    if newProduct.provider == .bershka,
-                       let oldBershka = existing.bershkaMetadata,
-                       let newBershka = newProduct.bershkaMetadata {
-                        return oldBershka.productID == newBershka.productID &&
-                            oldBershka.colorID == newBershka.colorID &&
-                            oldBershka.sku == newBershka.sku
-                    }
-                    if newProduct.provider == .pullAndBear,
-                       let oldPullAndBear = existing.pullAndBearMetadata,
-                       let newPullAndBear = newProduct.pullAndBearMetadata {
-                        return oldPullAndBear.productCode == newPullAndBear.productCode &&
-                            oldPullAndBear.colorIdentity == newPullAndBear.colorIdentity &&
-                            oldPullAndBear.sizeName.caseInsensitiveCompare(newPullAndBear.sizeName) == .orderedSame
-                    }
-                    return ShopifyChecker.productIdentity(for: existing.productURL) == identity &&
-                        existing.variantID == newProduct.variantID
-                }
-                guard !alreadyTracked else { return false }
+            AddProductSheet(
+                defaultIntervalMinutes: checkIntervalMinutes,
+                existingProducts: trackedProducts
+            ) { newProducts in
+                var addedCount = 0
+                var duplicateCount = 0
+                var newlyAdded: [TrackedProduct] = []
 
-                trackedProducts.append(newProduct)
-                TrackedProductStore.save(trackedProducts)
-                selectedProductID = newProduct.id
-                refreshMenuBarSummary()
-                activeSheet = nil
-                scheduleNextAutomaticCheck()
-                syncPowerPrevention()
-                return true
+                for product in newProducts {
+                    let isDup = trackedProducts.contains { $0.isDuplicate(of: product) }
+                    if isDup {
+                        duplicateCount += 1
+                    } else {
+                        newlyAdded.append(product)
+                        addedCount += 1
+                    }
+                }
+
+                if !newlyAdded.isEmpty {
+                    trackedProducts.append(contentsOf: newlyAdded)
+                    TrackedProductStore.save(trackedProducts)
+                    selectedProductID = newlyAdded.last!.id
+                    refreshMenuBarSummary()
+                    activeSheet = nil
+                    scheduleNextAutomaticCheck()
+                    syncPowerPrevention()
+                }
+
+                return (added: addedCount, duplicates: duplicateCount)
             }
         }
         .confirmationDialog(
@@ -1349,8 +1358,15 @@ struct ContentView: View {
     private func updateCheckInterval(_ minutes: Int, for productID: UUID) {
         guard let index = trackedProducts.firstIndex(where: { $0.id == productID }) else { return }
         trackedProducts[index].checkIntervalMinutes = minutes
+        let effectiveMinutes = AdaptiveMonitoringPolicy.effectiveIntervalMinutes(
+            baseMinutes: minutes,
+            status: trackedProducts[index].status,
+            consecutiveUnchangedChecks: trackedProducts[index].consecutiveUnchangedChecks,
+            consecutiveFailureChecks: trackedProducts[index].consecutiveFailureChecks,
+            isEnabled: adaptiveMonitoringEnabled
+        )
         trackedProducts[index].nextCheckDate = trackedProducts[index].lastChecked?
-            .addingTimeInterval(TimeInterval(minutes * 60)) ?? Date()
+            .addingTimeInterval(TimeInterval(effectiveMinutes * 60)) ?? Date()
         TrackedProductStore.save(trackedProducts)
         scheduleNextAutomaticCheck()
     }
@@ -1543,6 +1559,7 @@ private struct ProductDetailView: View {
     @State private var newGroupName = ""
     @State private var showingNewTagAlert = false
     @State private var newTagName = ""
+    @AppStorage("adaptiveMonitoringEnabled") private var adaptiveMonitoringEnabled = false
 
     @ObservedObject private var orgStore = ProductOrganizationStore.shared
     @ObservedObject private var auditManager = NotificationAuditManager.shared
@@ -1673,17 +1690,42 @@ private struct ProductDetailView: View {
                         }
                         GridRow {
                             detailLabel("Kontrol aralığı")
-                            Picker("", selection: Binding(
-                                get: { product.checkIntervalMinutes },
-                                set: onIntervalChange
-                            )) {
-                                ForEach(ProductCheckInterval.minutes, id: \.self) { minutes in
-                                    Text(ProductCheckInterval.title(for: minutes)).tag(minutes)
+                            HStack(spacing: 8) {
+                                Picker("", selection: Binding(
+                                    get: { product.checkIntervalMinutes },
+                                    set: onIntervalChange
+                                )) {
+                                    ForEach(ProductCheckInterval.minutes, id: \.self) { minutes in
+                                        Text(ProductCheckInterval.title(for: minutes)).tag(minutes)
+                                    }
+                                }
+                                .labelsHidden()
+                                .disabled(!canChangeInterval)
+                                .help(canChangeInterval ? "Kontrol aralığını değiştir" : "Kontrol tamamlanınca kullanılabilir")
+
+                                if adaptiveMonitoringEnabled {
+                                    let effective = AdaptiveMonitoringPolicy.effectiveIntervalMinutes(
+                                        baseMinutes: product.checkIntervalMinutes,
+                                        status: product.status,
+                                        consecutiveUnchangedChecks: product.consecutiveUnchangedChecks,
+                                        consecutiveFailureChecks: product.consecutiveFailureChecks,
+                                        isEnabled: true
+                                    )
+                                    if effective != product.checkIntervalMinutes {
+                                        Text("(Etkin: \(ProductCheckInterval.shortTitle(for: effective)))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .help(AdaptiveMonitoringPolicy.reason(
+                                                baseMinutes: product.checkIntervalMinutes,
+                                                effectiveMinutes: effective,
+                                                status: product.status,
+                                                consecutiveUnchangedChecks: product.consecutiveUnchangedChecks,
+                                                consecutiveFailureChecks: product.consecutiveFailureChecks,
+                                                isEnabled: true
+                                            ) ?? "Akıllı kontrol aralığı")
+                                    }
                                 }
                             }
-                            .labelsHidden()
-                            .disabled(!canChangeInterval)
-                            .help(canChangeInterval ? "Kontrol aralığını değiştir" : "Kontrol tamamlanınca kullanılabilir")
                         }
                         GridRow {
                             detailLabel("Son kontrol")
@@ -2649,6 +2691,7 @@ private struct StorePageWebView: NSViewRepresentable {
     @Binding var errorMessage: String?
     let notificationsEnabled: Bool
     let emailNotificationsEnabled: Bool
+    let adaptiveMonitoringEnabled: Bool
     let onCheckComplete: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -2660,6 +2703,7 @@ private struct StorePageWebView: NSViewRepresentable {
             errorMessage: $errorMessage,
             notificationsEnabled: notificationsEnabled,
             emailNotificationsEnabled: emailNotificationsEnabled,
+            adaptiveMonitoringEnabled: adaptiveMonitoringEnabled,
             onCheckComplete: onCheckComplete
         )
     }
@@ -2677,7 +2721,8 @@ private struct StorePageWebView: NSViewRepresentable {
             product: $product,
             webView: webView,
             notificationsEnabled: notificationsEnabled,
-            emailNotificationsEnabled: emailNotificationsEnabled
+            emailNotificationsEnabled: emailNotificationsEnabled,
+            adaptiveMonitoringEnabled: adaptiveMonitoringEnabled
         )
     }
 
@@ -2689,6 +2734,7 @@ private struct StorePageWebView: NSViewRepresentable {
         private var errorMessage: Binding<String?>
         private var notificationsEnabled: Bool
         private var emailNotificationsEnabled: Bool
+        private var adaptiveMonitoringEnabled: Bool
         private let onCheckComplete: () -> Void
         private var loadedProductID: UUID
         private var pageIsReady = false
@@ -2711,6 +2757,7 @@ private struct StorePageWebView: NSViewRepresentable {
             errorMessage: Binding<String?>,
             notificationsEnabled: Bool,
             emailNotificationsEnabled: Bool,
+            adaptiveMonitoringEnabled: Bool,
             onCheckComplete: @escaping () -> Void
         ) {
             self.product = product
@@ -2720,6 +2767,7 @@ private struct StorePageWebView: NSViewRepresentable {
             self.errorMessage = errorMessage
             self.notificationsEnabled = notificationsEnabled
             self.emailNotificationsEnabled = emailNotificationsEnabled
+            self.adaptiveMonitoringEnabled = adaptiveMonitoringEnabled
             self.onCheckComplete = onCheckComplete
             self.loadedProductID = product.wrappedValue.id
         }
@@ -2729,11 +2777,13 @@ private struct StorePageWebView: NSViewRepresentable {
             product: Binding<TrackedProduct>,
             webView: WKWebView,
             notificationsEnabled: Bool,
-            emailNotificationsEnabled: Bool
+            emailNotificationsEnabled: Bool,
+            adaptiveMonitoringEnabled: Bool
         ) {
             self.product = product
             self.notificationsEnabled = notificationsEnabled
             self.emailNotificationsEnabled = emailNotificationsEnabled
+            self.adaptiveMonitoringEnabled = adaptiveMonitoringEnabled
             let currentProduct = product.wrappedValue
             if currentProduct.id != loadedProductID {
                 loadedProductID = currentProduct.id
@@ -2917,13 +2967,20 @@ private struct StorePageWebView: NSViewRepresentable {
                     if wasInError {
                         self.product.wrappedValue.record(.checkRecovered, previousState: previousAvailability, newState: available)
                     }
+                    self.product.wrappedValue.consecutiveFailureChecks = 0
                     switch transition {
                     case .restocked:
+                        self.product.wrappedValue.consecutiveUnchangedChecks = 0
                         self.product.wrappedValue.record(.stockArrived, previousState: false, newState: true)
                     case .wentOutOfStock:
+                        self.product.wrappedValue.consecutiveUnchangedChecks = 0
                         self.product.wrappedValue.record(.stockDepleted, previousState: true, newState: false)
-                    case .initial, .unchanged:
-                        break
+                    case .unchanged(available: false):
+                        self.product.wrappedValue.consecutiveUnchangedChecks += 1
+                    case .unchanged(available: true):
+                        self.product.wrappedValue.consecutiveUnchangedChecks = 0
+                    case .initial:
+                        self.product.wrappedValue.consecutiveUnchangedChecks = 0
                     }
                     self.product.wrappedValue.lastAvailabilityTransition = transition
                     self.product.wrappedValue.selectedVariant.availability = available
@@ -3104,6 +3161,7 @@ private struct StorePageWebView: NSViewRepresentable {
             if isNetworkError {
                 print("[NetworkGuard] Ağ bağlantısı sorunu nedeniyle kontrol ertelendi: \(message)")
             } else {
+                product.wrappedValue.consecutiveFailureChecks += 1
                 if product.wrappedValue.lastCheckError == nil {
                     product.wrappedValue.record(.checkFailed, previousState: product.wrappedValue.lastKnownAvailable)
                 }
@@ -3122,8 +3180,15 @@ private struct StorePageWebView: NSViewRepresentable {
             if !deferNextCheckIfNetworkError {
                 let checkedAt = Date()
                 product.wrappedValue.lastChecked = checkedAt
+                let effectiveMinutes = AdaptiveMonitoringPolicy.effectiveIntervalMinutes(
+                    baseMinutes: product.wrappedValue.checkIntervalMinutes,
+                    status: product.wrappedValue.status,
+                    consecutiveUnchangedChecks: product.wrappedValue.consecutiveUnchangedChecks,
+                    consecutiveFailureChecks: product.wrappedValue.consecutiveFailureChecks,
+                    isEnabled: adaptiveMonitoringEnabled
+                )
                 product.wrappedValue.nextCheckDate = checkedAt.addingTimeInterval(
-                    TimeInterval(product.wrappedValue.checkIntervalMinutes * 60)
+                    TimeInterval(effectiveMinutes * 60)
                 )
             }
             checksCompleted += 1
@@ -3294,6 +3359,7 @@ private final class StockNotificationManager {
 private struct SettingsView: View {
     @AppStorage("automaticCheckingEnabled") private var automaticCheckingEnabled = true
     @AppStorage("checkIntervalMinutes") private var checkIntervalMinutes = 1
+    @AppStorage("adaptiveMonitoringEnabled") private var adaptiveMonitoringEnabled = false
     @AppStorage("stockNotificationsEnabled") private var stockNotificationsEnabled = true
     @AppStorage("emailNotificationsEnabled") private var emailNotificationsEnabled = false
     @AppStorage("launchAtLoginEnabled") private var launchAtLoginEnabled = false
@@ -3314,6 +3380,12 @@ private struct SettingsView: View {
                         Text(ProductCheckInterval.title(for: minutes)).tag(minutes)
                     }
                 }
+
+                Toggle("Akıllı kontrol aralığı", isOn: $adaptiveMonitoringEnabled)
+                Text("Uzun süre değişiklik olmadığında kontrol sıklığını otomatik olarak azaltır ve gereksiz istekleri sınırlar.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 Text("Kontroller, StockPing çalıştığı sürece gerçekleştirilir.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -3481,6 +3553,7 @@ private struct SettingsView: View {
     private func resetSettings() {
         automaticCheckingEnabled = true
         checkIntervalMinutes = 1
+        adaptiveMonitoringEnabled = false
         stockNotificationsEnabled = true
         emailNotificationsEnabled = false
         monitoringPowerMode = .default
@@ -3519,13 +3592,9 @@ private enum ProductAnalysisFailure: LocalizedError {
 }
 
 private struct AddProductSheet: View {
-    private struct ColorChoice: Identifiable {
-        let id: String
-        let name: String
-    }
-
     let defaultIntervalMinutes: Int
-    let onAdd: (TrackedProduct) -> Bool
+    let existingProducts: [TrackedProduct]
+    let onAddMultiple: ([TrackedProduct]) -> (added: Int, duplicates: Int)
 
     @Environment(\.dismiss) private var dismiss
     @State private var productURLText = ""
@@ -3535,8 +3604,9 @@ private struct AddProductSheet: View {
     @State private var productName: String?
     @State private var provider: StoreProvider = .shopify
     @State private var variants: [StoreVariantCandidate] = []
-    @State private var selectedVariantID = ""
-    @State private var selectedColorProductID = ""
+    @State private var optionDimensions: [DiscoveredOptionDimension] = []
+    @State private var selectedFilterOptionValue = "all"
+    @State private var selectedVariantIDs: Set<String> = []
     @State private var analysisError: String?
     @State private var duplicateError: String?
     @FocusState private var isURLFieldFocused: Bool
@@ -3545,31 +3615,23 @@ private struct AddProductSheet: View {
         Self.validatedProductURL(productURLText) != nil
     }
 
+    private var filterDimension: DiscoveredOptionDimension? {
+        optionDimensions.first(where: { $0.values.count > 1 })
+    }
+
     private var visibleVariants: [StoreVariantCandidate] {
-        guard [.zara, .bershka, .pullAndBear].contains(provider), !selectedColorProductID.isEmpty else { return variants }
+        guard let filter = filterDimension, selectedFilterOptionValue != "all" else {
+            return variants
+        }
         return variants.filter { candidate in
-            if provider == .zara { return candidate.zaraMetadata?.colorProductID == selectedColorProductID }
-            if provider == .bershka { return candidate.bershkaMetadata?.colorID == selectedColorProductID }
-            return candidate.pullAndBearMetadata?.colorIdentity == selectedColorProductID
+            candidate.variant.options.contains { $0.name == filter.name && $0.value == selectedFilterOptionValue }
         }
     }
 
-    private var colors: [ColorChoice] {
-        var seen = Set<String>()
-        return variants.compactMap { candidate in
-            if provider == .zara, let metadata = candidate.zaraMetadata,
-               seen.insert(metadata.colorProductID).inserted {
-                return ColorChoice(id: metadata.colorProductID, name: metadata.colorName)
-            }
-            if provider == .bershka, let metadata = candidate.bershkaMetadata,
-               seen.insert(metadata.colorID).inserted {
-                return ColorChoice(id: metadata.colorID, name: metadata.colorName)
-            }
-            if provider == .pullAndBear, let metadata = candidate.pullAndBearMetadata,
-               seen.insert(metadata.colorIdentity).inserted {
-                return ColorChoice(id: metadata.colorIdentity, name: metadata.colorName)
-            }
-            return nil
+    private func isCandidateAlreadyTracked(_ candidate: StoreVariantCandidate) -> Bool {
+        guard let analysisURL else { return false }
+        return existingProducts.contains { existing in
+            existing.matches(candidate: candidate, productURL: analysisURL, provider: provider)
         }
     }
 
@@ -3638,41 +3700,135 @@ private struct AddProductSheet: View {
                 }
 
                 if let productName {
-                    GroupBox("Ürün") {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text(productName)
-                                .font(.headline)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Divider()
-                            if [.zara, .bershka, .pullAndBear].contains(provider) {
-                                Picker("Renk", selection: $selectedColorProductID) {
-                                    Text("Renk seçin").tag("")
-                                    ForEach(colors, id: \.id) { color in
-                                        Text(color.name).tag(color.id)
-                                    }
-                                }
-                                .pickerStyle(.menu)
-                                .accessibilityLabel("Renk")
-                                Picker("Beden", selection: $selectedVariantID) {
-                                    Text("Beden seçin").tag("")
-                                    ForEach(visibleVariants) { variant in
-                                        Text(sizePickerTitle(for: variant)).tag(variant.id)
-                                    }
-                                }
-                                .pickerStyle(.menu)
-                                .accessibilityLabel("Beden")
-                            } else {
-                                Picker("Varyant", selection: $selectedVariantID) {
-                                    Text("Varyant seçin").tag("")
-                                    ForEach(variants) { variant in
-                                        Text(variant.displayTitle).tag(variant.id)
-                                    }
-                                }
-                                .pickerStyle(.menu)
-                                .accessibilityLabel("Varyant")
+                    GroupBox {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Text(productName)
+                                    .font(.headline)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Spacer()
+                                Text(provider.displayName)
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 3)
+                                    .background(.quaternary, in: Capsule())
                             }
+
+                            Divider()
+
+                            HStack(spacing: 12) {
+                                if let filterDim = filterDimension {
+                                    Picker(filterDim.name, selection: $selectedFilterOptionValue) {
+                                        Text("Tüm \(filterDim.name)ler (\(variants.count))").tag("all")
+                                        ForEach(filterDim.values, id: \.self) { val in
+                                            let count = variants.filter { c in
+                                                c.variant.options.contains { $0.name == filterDim.name && $0.value == val }
+                                            }.count
+                                            Text("\(val) (\(count))").tag(val)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                    .frame(maxWidth: 220)
+                                }
+
+                                Spacer(minLength: 0)
+
+                                Button("Tümünü Seç") {
+                                    let selectable = visibleVariants.filter { !isCandidateAlreadyTracked($0) }.map(\.id)
+                                    selectedVariantIDs.formUnion(selectable)
+                                }
+                                .buttonStyle(.link)
+                                .font(.caption)
+                                .disabled(visibleVariants.allSatisfy { isCandidateAlreadyTracked($0) })
+
+                                Text("·")
+                                    .foregroundStyle(.tertiary)
+
+                                Button("Seçimi Temizle") {
+                                    let visibleIDs = Set(visibleVariants.map(\.id))
+                                    selectedVariantIDs.subtract(visibleIDs)
+                                }
+                                .buttonStyle(.link)
+                                .font(.caption)
+                                .disabled(selectedVariantIDs.isEmpty)
+                            }
+
+                            ScrollView {
+                                VStack(spacing: 2) {
+                                    ForEach(visibleVariants) { candidate in
+                                        let isTracked = isCandidateAlreadyTracked(candidate)
+                                        let isSelected = selectedVariantIDs.contains(candidate.id)
+
+                                        HStack(spacing: 10) {
+                                            Toggle("", isOn: Binding(
+                                                get: { isSelected },
+                                                set: { shouldSelect in
+                                                    if shouldSelect {
+                                                        selectedVariantIDs.insert(candidate.id)
+                                                    } else {
+                                                        selectedVariantIDs.remove(candidate.id)
+                                                    }
+                                                }
+                                            ))
+                                            .labelsHidden()
+                                            .disabled(isTracked)
+
+                                            Text(candidate.displayTitle)
+                                                .font(.body)
+                                                .foregroundStyle(isTracked ? .secondary : .primary)
+                                                .strikethrough(isTracked)
+
+                                            Spacer()
+
+                                            if let available = candidate.initialAvailability {
+                                                if available {
+                                                    Text("Stokta")
+                                                        .font(.caption2.weight(.medium))
+                                                        .padding(.horizontal, 6)
+                                                        .padding(.vertical, 2)
+                                                        .background(Color.green.opacity(0.15), in: Capsule())
+                                                        .foregroundStyle(.green)
+                                                } else {
+                                                    Text("Stokta değil")
+                                                        .font(.caption2.weight(.medium))
+                                                        .padding(.horizontal, 6)
+                                                        .padding(.vertical, 2)
+                                                        .background(Color.secondary.opacity(0.12), in: Capsule())
+                                                        .foregroundStyle(.secondary)
+                                                }
+                                            }
+
+                                            if isTracked {
+                                                Text("Zaten Takipte")
+                                                    .font(.caption2.weight(.medium))
+                                                    .padding(.horizontal, 6)
+                                                    .padding(.vertical, 2)
+                                                    .background(Color.orange.opacity(0.15), in: Capsule())
+                                                    .foregroundStyle(.orange)
+                                            }
+                                        }
+                                        .padding(.vertical, 5)
+                                        .padding(.horizontal, 8)
+                                        .background(isSelected ? Color.accentColor.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            guard !isTracked else { return }
+                                            if isSelected {
+                                                selectedVariantIDs.remove(candidate.id)
+                                            } else {
+                                                selectedVariantIDs.insert(candidate.id)
+                                            }
+                                        }
+                                    }
+                                }
+                                .padding(4)
+                            }
+                            .frame(maxHeight: 180)
+                            .background(Color(nsColor: .controlBackgroundColor).opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.15), lineWidth: 1))
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(4)
                     }
                 }
 
@@ -3683,11 +3839,13 @@ private struct AddProductSheet: View {
                     Button("İptal") { dismiss() }
                         .keyboardShortcut(.cancelAction)
                     Spacer()
-                    Button("Takibe Ekle", action: addSelectedProduct)
+                    let selectedCount = selectedVariantIDs.count
+                    let buttonTitle = selectedCount > 1 ? "\(selectedCount) Varyantı Takibe Ekle" : "Takibe Ekle"
+                    Button(buttonTitle, action: addSelectedProducts)
                         .buttonStyle(.borderedProminent)
-                        .disabled(selectedVariantID.isEmpty || isAnalyzing)
+                        .disabled(selectedVariantIDs.isEmpty || isAnalyzing)
                         .keyboardShortcut(.defaultAction)
-                        .accessibilityLabel("Takibe Ekle")
+                        .accessibilityLabel(buttonTitle)
                 }
             }
             .padding(20)
@@ -3712,12 +3870,9 @@ private struct AddProductSheet: View {
                 }
             }
         }
-        .frame(minWidth: 480, idealWidth: 540, minHeight: 300, idealHeight: 420)
+        .frame(minWidth: 520, idealWidth: 580, minHeight: 400, idealHeight: 520)
         .onAppear {
             isURLFieldFocused = true
-        }
-        .onChange(of: selectedColorProductID) { _, _ in
-            selectedVariantID = ""
         }
     }
 
@@ -3739,9 +3894,11 @@ private struct AddProductSheet: View {
         productName = nil
         provider = .shopify
         variants = []
-        selectedVariantID = ""
-        selectedColorProductID = ""
+        optionDimensions = []
+        selectedFilterOptionValue = "all"
+        selectedVariantIDs = []
         analysisError = nil
+        duplicateError = nil
     }
 
     private func handleAnalysisResult(_ result: Result<StoreProductAnalysis, ProductAnalysisFailure>) {
@@ -3751,76 +3908,74 @@ private struct AddProductSheet: View {
             productName = analysis.productName
             provider = analysis.provider
             variants = analysis.variants
-            if analysis.provider == .zara {
-                selectedColorProductID = analysis.variants.compactMap { $0.zaraMetadata?.colorProductID }.first ?? ""
-                selectedVariantID = ""
-            } else if analysis.provider == .bershka {
-                let requestedColor = analysisURL.flatMap { url in
-                    URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
-                        .first(where: { $0.name.caseInsensitiveCompare("colorId") == .orderedSame })?.value
+            optionDimensions = analysis.optionDimensions
+            duplicateError = nil
+            analysisError = nil
+
+            if let primaryDim = analysis.optionDimensions.first(where: { $0.values.count > 1 }) {
+                if provider == .bershka, let url = analysisURL,
+                   let colorID = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name.caseInsensitiveCompare("colorId") == .orderedSame })?.value,
+                   let matching = variants.first(where: { $0.bershkaMetadata?.colorID == colorID }),
+                   let matchingVal = matching.variant.options.first(where: { $0.name == primaryDim.name })?.value {
+                    selectedFilterOptionValue = matchingVal
+                } else if provider == .pullAndBear, let url = analysisURL,
+                          let cs = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name.caseInsensitiveCompare("cS") == .orderedSame })?.value,
+                          let matching = variants.first(where: { $0.pullAndBearMetadata?.colorIdentity == cs }),
+                          let matchingVal = matching.variant.options.first(where: { $0.name == primaryDim.name })?.value {
+                    selectedFilterOptionValue = matchingVal
+                } else {
+                    selectedFilterOptionValue = "all"
                 }
-                let discoveredColorIDs = Array(Set(analysis.variants.compactMap { $0.bershkaMetadata?.colorID }))
-                selectedColorProductID = discoveredColorIDs.count == 1
-                    ? discoveredColorIDs[0]
-                    : requestedColor.flatMap { requested in discoveredColorIDs.first(where: { $0 == requested }) } ?? ""
-                selectedVariantID = ""
-            } else if analysis.provider == .pullAndBear {
-                let requestedColor = analysisURL.flatMap { url in
-                    URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
-                        .first(where: { $0.name.caseInsensitiveCompare("cS") == .orderedSame })?.value
-                }
-                let discoveredColors = Array(Set(analysis.variants.compactMap { $0.pullAndBearMetadata?.colorIdentity }))
-                selectedColorProductID = requestedColor.flatMap { requested in discoveredColors.first(where: { $0 == requested }) }
-                    ?? (discoveredColors.count == 1 ? discoveredColors[0] : "")
-                selectedVariantID = ""
             } else {
-                selectedVariantID = ""
+                selectedFilterOptionValue = "all"
             }
+
+            // Auto-select first available, untracked variant
+            let firstSelectable = variants.first { !isCandidateAlreadyTracked($0) }
+            if let firstSelectable {
+                selectedVariantIDs = [firstSelectable.id]
+            } else {
+                selectedVariantIDs = []
+            }
+
         case .failure(let error):
             analysisError = error.localizedDescription
         }
     }
 
-    private func addSelectedProduct() {
-        guard
-            let analysisURL,
-            let productName,
-            let candidate = variants.first(where: { $0.id == selectedVariantID })
-        else { return }
-
+    private func addSelectedProducts() {
+        guard let analysisURL, let productName else { return }
         duplicateError = nil
 
-        let added = onAdd(TrackedProduct(
-            id: UUID(),
-            productName: productName,
-            productURL: analysisURL,
-            selectedVariant: candidate.variant,
-            lastChecked: nil,
-            checkIntervalMinutes: defaultIntervalMinutes,
-            nextCheckDate: Date(),
-            isPaused: false,
-            lastCheckError: nil,
-            lastAvailabilityTransition: nil,
-            provider: provider,
-            zaraMetadata: candidate.zaraMetadata,
-            bershkaMetadata: candidate.bershkaMetadata,
-            pullAndBearMetadata: candidate.pullAndBearMetadata,
-            events: []
-        ))
-        if added {
+        let candidatesToAdd = variants.filter { selectedVariantIDs.contains($0.id) }
+        guard !candidatesToAdd.isEmpty else { return }
+
+        let products = candidatesToAdd.map { candidate in
+            TrackedProduct(
+                id: UUID(),
+                productName: productName,
+                productURL: analysisURL,
+                selectedVariant: candidate.variant,
+                lastChecked: nil,
+                checkIntervalMinutes: defaultIntervalMinutes,
+                nextCheckDate: Date(),
+                isPaused: false,
+                lastCheckError: nil,
+                lastAvailabilityTransition: nil,
+                provider: provider,
+                zaraMetadata: candidate.zaraMetadata,
+                bershkaMetadata: candidate.bershkaMetadata,
+                pullAndBearMetadata: candidate.pullAndBearMetadata,
+                events: []
+            )
+        }
+
+        let result = onAddMultiple(products)
+        if result.added > 0 {
             dismiss()
         } else {
-            duplicateError = "Bu ürünün bu varyantı zaten takip ediliyor."
+            duplicateError = "Seçilen varyantlar zaten takip ediliyor."
         }
-    }
-
-    private func sizePickerTitle(for candidate: StoreVariantCandidate) -> String {
-        let size = candidate.variant.options.last?.value ?? candidate.displayTitle
-        if provider == .pullAndBear, let available = candidate.pullAndBearInitialAvailability {
-            return "\(size) — \(available ? "Stokta" : "Stokta değil")"
-        }
-        guard provider == .bershka, let snapshot = candidate.bershkaSnapshot else { return size }
-        return "\(size) — \(snapshot.displayLabel)"
     }
 
     private static func validatedProductURL(_ value: String) -> URL? {

@@ -11,12 +11,46 @@ struct StoreVariantCandidate: Identifiable, Sendable {
 
     var id: String { variant.id }
     var displayTitle: String { variant.displayTitle ?? variant.displayDescription }
+
+    var initialAvailability: Bool? {
+        variant.availability ?? pullAndBearInitialAvailability ?? bershkaSnapshot?.available
+    }
+}
+
+struct DiscoveredOptionDimension: Identifiable, Hashable, Sendable {
+    let name: String
+    let values: [String]
+    var id: String { name }
 }
 
 struct StoreProductAnalysis: Sendable {
     var provider: StoreProvider
     var productName: String
     var variants: [StoreVariantCandidate]
+
+    var optionDimensions: [DiscoveredOptionDimension] {
+        var dimensionMap: [String: [String]] = [:]
+        var dimensionOrder: [String] = []
+
+        for candidate in variants {
+            for option in candidate.variant.options {
+                let name = option.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                let value = option.value.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty, !value.isEmpty else { continue }
+                if dimensionMap[name] == nil {
+                    dimensionMap[name] = []
+                    dimensionOrder.append(name)
+                }
+                if !dimensionMap[name]!.contains(value) {
+                    dimensionMap[name]!.append(value)
+                }
+            }
+        }
+
+        return dimensionOrder.map { name in
+            DiscoveredOptionDimension(name: name, values: dimensionMap[name] ?? [])
+        }
+    }
 }
 
 @MainActor
@@ -96,7 +130,7 @@ extension ShopifyChecker: StoreChecker {
     static func analyze(in webView: WKWebView, productURL: URL, activePageURL: URL?) async throws -> StoreProductAnalysis {
         let product = try await fetchProduct(in: webView, productURL: productURL, activePageURL: activePageURL)
         return StoreProductAnalysis(provider: .shopify, productName: product.title, variants: product.variants.map {
-            StoreVariantCandidate(variant: $0.selectedVariant(), zaraMetadata: nil)
+            StoreVariantCandidate(variant: $0.selectedVariant(availability: $0.available), zaraMetadata: nil)
         })
     }
 

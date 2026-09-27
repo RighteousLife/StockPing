@@ -180,16 +180,16 @@ enum BershkaChecker {
                     mastersSizeID: type.mastersSizeID,
                     partnumber: type.partnumber
                 )
-                let variant = SelectedVariant(
-                    id: "bershka:\(expectedProductID):\(color.id):\(type.sku)",
-                    title: "\(color.name) / \(size.name)",
-                    options: options,
-                    availability: nil
-                )
                 let snapshot = BershkaAvailabilitySnapshot(
                     rawStock: size.stock,
                     isBuyable: size.isBuyable,
                     isLowStock: size.isLowStock
+                )
+                let variant = SelectedVariant(
+                    id: "bershka:\(expectedProductID):\(color.id):\(type.sku)",
+                    title: "\(color.name) / \(size.name)",
+                    options: options,
+                    availability: snapshot.available
                 )
                 candidates.append(StoreVariantCandidate(
                     variant: variant,
