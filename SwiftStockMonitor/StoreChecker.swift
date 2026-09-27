@@ -1,0 +1,110 @@
+import Foundation
+import WebKit
+
+struct StoreVariantCandidate: Identifiable, Sendable {
+    var variant: SelectedVariant
+    var zaraMetadata: ZaraVariantMetadata?
+    var bershkaMetadata: BershkaVariantMetadata?
+    var bershkaSnapshot: BershkaAvailabilitySnapshot?
+    var pullAndBearMetadata: PullAndBearVariantMetadata?
+    var pullAndBearInitialAvailability: Bool?
+
+    var id: String { variant.id }
+    var displayTitle: String { variant.displayTitle ?? variant.displayDescription }
+}
+
+struct StoreProductAnalysis: Sendable {
+    var provider: StoreProvider
+    var productName: String
+    var variants: [StoreVariantCandidate]
+}
+
+@MainActor
+protocol StoreChecker {
+    static var provider: StoreProvider { get }
+    static func canHandle(_ url: URL) -> Bool
+    static func normalizedProductURL(from url: URL) -> URL?
+    static func analyze(in webView: WKWebView, productURL: URL, activePageURL: URL?) async throws -> StoreProductAnalysis
+    static func check(in webView: WKWebView, product: TrackedProduct, activePageURL: URL?) async throws -> Bool
+}
+
+@MainActor
+enum StoreCheckerRouter {
+    static func provider(for url: URL) -> StoreProvider? {
+        checker(for: url)?.provider
+    }
+
+    static func normalizedProductURL(from input: String) -> URL? {
+        guard let components = URLComponents(string: input.trimmingCharacters(in: .whitespacesAndNewlines)),
+              components.scheme?.lowercased() == "https",
+              components.host?.isEmpty == false,
+              components.user == nil,
+              components.password == nil else { return nil }
+
+        guard let url = components.url, let checker = checker(for: url) else { return nil }
+        return checker.normalizedProductURL(from: url)
+    }
+
+    static func analyze(in webView: WKWebView, productURL: URL, activePageURL: URL?) async throws -> StoreProductAnalysis {
+        guard let checker = checker(for: productURL) else { throw StoreCheckerError.unsupportedStore }
+        return try await checker.analyze(in: webView, productURL: productURL, activePageURL: activePageURL)
+    }
+
+    static func check(in webView: WKWebView, product: TrackedProduct, activePageURL: URL?) async throws -> Bool {
+        return try await checker(for: product.provider).check(
+            in: webView,
+            product: product,
+            activePageURL: activePageURL
+        )
+    }
+
+    private static func checker(for url: URL) -> (any StoreChecker.Type)? {
+        if PullAndBearChecker.canHandle(url) { return PullAndBearChecker.self }
+        if BershkaChecker.canHandle(url) { return BershkaChecker.self }
+        if ZaraChecker.canHandle(url) { return ZaraChecker.self }
+        if ShopifyChecker.canHandle(url) { return ShopifyChecker.self }
+        return nil
+    }
+
+    private static func checker(for provider: StoreProvider) -> any StoreChecker.Type {
+        switch provider {
+        case .shopify: ShopifyChecker.self
+        case .zara: ZaraChecker.self
+        case .bershka: BershkaChecker.self
+        case .pullAndBear: PullAndBearChecker.self
+        }
+    }
+}
+
+enum StoreCheckerError: LocalizedError {
+    case unsupportedStore
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedStore: "Bu mağaza türü henüz desteklenmiyor. Shopify, Zara Türkiye, Bershka Türkiye veya Pull&Bear Türkiye ürün URL'si kullanın."
+        }
+    }
+}
+
+extension ShopifyChecker: StoreChecker {
+    static var provider: StoreProvider { .shopify }
+
+    static func normalizedProductURL(from url: URL) -> URL? {
+        normalizedProductURL(from: url.absoluteString)
+    }
+
+    static func analyze(in webView: WKWebView, productURL: URL, activePageURL: URL?) async throws -> StoreProductAnalysis {
+        let product = try await fetchProduct(in: webView, productURL: productURL, activePageURL: activePageURL)
+        return StoreProductAnalysis(provider: .shopify, productName: product.title, variants: product.variants.map {
+            StoreVariantCandidate(variant: $0.selectedVariant(), zaraMetadata: nil)
+        })
+    }
+
+    static func check(in webView: WKWebView, product: TrackedProduct, activePageURL: URL?) async throws -> Bool {
+        let remote = try await fetchProduct(in: webView, productURL: product.productURL, activePageURL: activePageURL)
+        guard let available = try variant(withID: product.variantID, in: remote).available else {
+            throw ShopifyCheckerError.availabilityUnavailable
+        }
+        return available
+    }
+}

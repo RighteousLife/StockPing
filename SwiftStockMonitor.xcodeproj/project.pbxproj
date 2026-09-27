@@ -1,0 +1,170 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+			A10000000000000000000001 /* SwiftStockMonitorApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* SwiftStockMonitorApp.swift */; };
+			A10000000000000000000002 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* WebKit.framework */; };
+			A10000000000000000000003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* Assets.xcassets */; };
+			A10000000000000000000005 /* ShopifyChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* ShopifyChecker.swift */; };
+			A10000000000000000000006 /* ProductModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* ProductModels.swift */; };
+			A10000000000000000000007 /* StoreChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* StoreChecker.swift */; };
+			A10000000000000000000008 /* ZaraChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008 /* ZaraChecker.swift */; };
+			A10000000000000000000009 /* ProductEvents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* ProductEvents.swift */; };
+			A1000000000000000000000A /* TurkishRelativeTime.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* TurkishRelativeTime.swift */; };
+			A1000000000000000000000B /* BershkaChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* BershkaChecker.swift */; };
+			A1000000000000000000000C /* PullAndBearChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000C /* PullAndBearChecker.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+			A20000000000000000000001 /* SwiftStockMonitorApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftStockMonitorApp.swift; sourceTree = "<group>"; };
+			A20000000000000000000002 /* SwiftStockMonitor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SwiftStockMonitor.app; sourceTree = BUILT_PRODUCTS_DIR; };
+			A20000000000000000000003 /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
+			A20000000000000000000004 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+			A20000000000000000000005 /* ShopifyChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShopifyChecker.swift; sourceTree = "<group>"; };
+			A20000000000000000000006 /* ProductModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductModels.swift; sourceTree = "<group>"; };
+			A20000000000000000000007 /* StoreChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreChecker.swift; sourceTree = "<group>"; };
+			A20000000000000000000008 /* ZaraChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZaraChecker.swift; sourceTree = "<group>"; };
+			A20000000000000000000009 /* ProductEvents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductEvents.swift; sourceTree = "<group>"; };
+			A2000000000000000000000A /* TurkishRelativeTime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurkishRelativeTime.swift; sourceTree = "<group>"; };
+			A2000000000000000000000B /* BershkaChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BershkaChecker.swift; sourceTree = "<group>"; };
+			A2000000000000000000000C /* PullAndBearChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PullAndBearChecker.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+			A30000000000000000000001 = {
+				isa = PBXGroup;
+				children = (
+					A30000000000000000000002 /* SwiftStockMonitor */,
+					A30000000000000000000004 /* Frameworks */,
+					A30000000000000000000003 /* Products */,
+				);
+				sourceTree = "<group>";
+			};
+			A30000000000000000000002 /* SwiftStockMonitor */ = {
+				isa = PBXGroup;
+				children = (A20000000000000000000001 /* SwiftStockMonitorApp.swift */, A20000000000000000000005 /* ShopifyChecker.swift */, A20000000000000000000006 /* ProductModels.swift */, A20000000000000000000007 /* StoreChecker.swift */, A20000000000000000000008 /* ZaraChecker.swift */, A20000000000000000000009 /* ProductEvents.swift */, A2000000000000000000000A /* TurkishRelativeTime.swift */, A2000000000000000000000B /* BershkaChecker.swift */, A2000000000000000000000C /* PullAndBearChecker.swift */, A20000000000000000000004 /* Assets.xcassets */,);
+				path = SwiftStockMonitor;
+				sourceTree = "<group>";
+			};
+			A30000000000000000000003 /* Products */ = {
+				isa = PBXGroup;
+				children = (A20000000000000000000002 /* SwiftStockMonitor.app */,);
+				name = Products;
+				sourceTree = "<group>";
+			};
+			A30000000000000000000004 /* Frameworks */ = {
+				isa = PBXGroup;
+				children = (A20000000000000000000003 /* WebKit.framework */,);
+				name = Frameworks;
+				sourceTree = "<group>";
+			};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+			A40000000000000000000001 /* SwiftStock Monitor */ = {
+				isa = PBXNativeTarget;
+				buildConfigurationList = A70000000000000000000001;
+				buildPhases = (
+					A50000000000000000000001 /* Sources */,
+					A50000000000000000000002 /* Frameworks */,
+					A50000000000000000000003 /* Resources */,
+				);
+				buildRules = ();
+				dependencies = ();
+				name = "SwiftStock Monitor";
+				productName = "SwiftStock Monitor";
+				productReference = A20000000000000000000002 /* SwiftStockMonitor.app */;
+				productType = "com.apple.product-type.application";
+			};
+/* End PBXNativeTarget section */
+
+/* Begin PBXSourcesBuildPhase section */
+			A50000000000000000000001 /* Sources */ = {
+				isa = PBXSourcesBuildPhase;
+				buildActionMask = 2147483647;
+				files = (A10000000000000000000001 /* SwiftStockMonitorApp.swift in Sources */, A10000000000000000000005 /* ShopifyChecker.swift in Sources */, A10000000000000000000006 /* ProductModels.swift in Sources */, A10000000000000000000007 /* StoreChecker.swift in Sources */, A10000000000000000000008 /* ZaraChecker.swift in Sources */, A10000000000000000000009 /* ProductEvents.swift in Sources */, A1000000000000000000000A /* TurkishRelativeTime.swift in Sources */, A1000000000000000000000B /* BershkaChecker.swift in Sources */, A1000000000000000000000C /* PullAndBearChecker.swift in Sources */,);
+				runOnlyForDeploymentPostprocessing = 0;
+			};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXFrameworksBuildPhase section */
+			A50000000000000000000002 /* Frameworks */ = {
+				isa = PBXFrameworksBuildPhase;
+				buildActionMask = 2147483647;
+				files = (A10000000000000000000002 /* WebKit.framework in Frameworks */,);
+				runOnlyForDeploymentPostprocessing = 0;
+			};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXResourcesBuildPhase section */
+			A50000000000000000000003 /* Resources */ = {
+				isa = PBXResourcesBuildPhase;
+				buildActionMask = 2147483647;
+				files = (A10000000000000000000003 /* Assets.xcassets in Resources */,);
+				runOnlyForDeploymentPostprocessing = 0;
+			};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXProject section */
+			A60000000000000000000001 /* Project object */ = {
+				isa = PBXProject;
+				attributes = {BuildIndependentTargetsInParallel = 1; LastUpgradeCheck = 2700; };
+				buildConfigurationList = A70000000000000000000002;
+				compatibilityVersion = "Xcode 14.0";
+				developmentRegion = en;
+				knownRegions = (en, Base,);
+				mainGroup = A30000000000000000000001;
+				productRefGroup = A30000000000000000000003 /* Products */;
+				projectDirPath = "";
+				projectRoot = "";
+				targets = (A40000000000000000000001 /* SwiftStock Monitor */,);
+			};
+/* End PBXProject section */
+
+/* Begin PBXBuildConfiguration section */
+			A80000000000000000000001 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {
+				ARCHS = arm64;
+				CODE_SIGNING_ALLOWED = NO;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.swiftstock.monitor;
+				PRODUCT_NAME = StockPing;
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_VERSION = 6.0;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = StockPing;
+				INFOPLIST_KEY_CFBundleName = StockPing;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				}; name = Debug; };
+			A80000000000000000000002 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {
+				ARCHS = arm64;
+				CODE_SIGNING_ALLOWED = NO;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.swiftstock.monitor;
+				PRODUCT_NAME = StockPing;
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_VERSION = 6.0;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = StockPing;
+				INFOPLIST_KEY_CFBundleName = StockPing;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				}; name = Release; };
+			A70000000000000000000001 /* Build configuration list for PBXNativeTarget */ = {isa = XCConfigurationList; buildConfigurations = (A80000000000000000000001 /* Debug */, A80000000000000000000002 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+			A70000000000000000000002 /* Build configuration list for PBXProject */ = {isa = XCConfigurationList; buildConfigurations = (A80000000000000000000001 /* Debug */, A80000000000000000000002 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End PBXBuildConfiguration section */
+
+	};
+	rootObject = A60000000000000000000001 /* Project object */;
+}
