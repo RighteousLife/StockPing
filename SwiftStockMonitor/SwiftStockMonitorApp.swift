@@ -1550,6 +1550,7 @@ private struct TagFlowView: View {
 
 private struct ProductDetailView: View {
     @State private var isProductInformationExpanded = true
+    @State private var isStockStatisticsExpanded = true
     @State private var isChangeHistoryExpanded = false
     @State private var isDiagnosticExpanded = false
     @State private var isNotificationAuditExpanded = false
@@ -1843,6 +1844,16 @@ private struct ProductDetailView: View {
 
                     Divider()
 
+                    // Collapsible Section: Stok İstatistikleri
+                    DisclosureSection(
+                        title: "Stok İstatistikleri",
+                        isExpanded: $isStockStatisticsExpanded
+                    ) {
+                        stockStatisticsContent
+                    }
+
+                    Divider()
+
                     // Collapsible Section 2: Değişiklik Geçmişi
                     DisclosureSection(
                         title: "Değişiklik Geçmişi (\(product.events.count))",
@@ -1879,6 +1890,7 @@ private struct ProductDetailView: View {
         }
         .onChange(of: product.id) { _, _ in
             isProductInformationExpanded = true
+            isStockStatisticsExpanded = true
             isChangeHistoryExpanded = false
             isDiagnosticExpanded = false
             isNotificationAuditExpanded = false
@@ -1975,6 +1987,101 @@ private struct ProductDetailView: View {
         let minutes = seconds / 60
         let remainder = seconds % 60
         return remainder == 0 ? "\(minutes) dk" : "\(minutes) dk \(remainder) sn"
+    }
+
+    @ViewBuilder
+    private var stockStatisticsContent: some View {
+        let stats = product.stockStatistics
+        if !stats.hasStockHistory {
+            Text("Henüz stok geçmişi oluşmadı.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: 14) {
+                Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 10) {
+                    if let lastChange = stats.lastStockChangeDate {
+                        GridRow {
+                            detailLabel("Son stok değişimi")
+                            Text(TurkishRelativeTime.string(from: lastChange))
+                                .font(.callout)
+                                .help(lastChange.formatted(date: .long, time: .complete))
+                        }
+                    }
+
+                    if stats.isCurrentlyInStock {
+                        GridRow {
+                            detailLabel("Son stokta bulunma")
+                            HStack(spacing: 5) {
+                                Circle()
+                                    .fill(Color.green)
+                                    .frame(width: 6, height: 6)
+                                Text("Şu an stokta")
+                                    .font(.callout.weight(.medium))
+                                    .foregroundStyle(.green)
+                            }
+                        }
+                    } else if let lastInStock = stats.lastInStockDate {
+                        GridRow {
+                            detailLabel("Son stokta bulunma")
+                            Text(TurkishRelativeTime.string(from: lastInStock))
+                                .font(.callout)
+                                .help(lastInStock.formatted(date: .long, time: .complete))
+                        }
+                    }
+
+                    if stats.totalRestockCount > 0 {
+                        GridRow {
+                            detailLabel("Toplam restock")
+                            Text("\(stats.totalRestockCount)")
+                                .font(.callout)
+                        }
+                        GridRow {
+                            detailLabel("Son 30 gün")
+                            Text("\(stats.recentRestockCount30Days)")
+                                .font(.callout)
+                        }
+                    }
+
+                    if let latestDurationDesc = stats.latestInStockDurationDescription {
+                        GridRow {
+                            detailLabel("Son stokta kalma")
+                            Text(latestDurationDesc)
+                                .font(.callout)
+                        }
+                    }
+
+                    if let avgDesc = stats.formattedAverageDuration {
+                        GridRow {
+                            detailLabel("Ortalama stokta kalma")
+                            Text(avgDesc)
+                                .font(.callout)
+                        }
+                    } else if stats.totalRestockCount > 0 && stats.completedIntervals.isEmpty {
+                        GridRow {
+                            detailLabel("Ortalama stokta kalma")
+                            Text("Yeterli veri yok")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if stats.completedIntervals.count >= 2,
+                       let minDesc = stats.formattedMinDuration,
+                       let maxDesc = stats.formattedMaxDuration {
+                        GridRow {
+                            detailLabel("En uzun stokta kalma")
+                            Text(maxDesc)
+                                .font(.callout)
+                        }
+                        GridRow {
+                            detailLabel("En kısa stokta kalma")
+                            Text(minDesc)
+                                .font(.callout)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     @ViewBuilder

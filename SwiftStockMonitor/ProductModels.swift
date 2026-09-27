@@ -287,6 +287,15 @@ struct TrackedProduct: Identifiable {
         return .unchecked
     }
 
+    var stockStatistics: StockStatistics {
+        StockStatistics.calculate(
+            from: events,
+            currentAvailability: lastKnownAvailable,
+            referenceDate: .now
+        )
+    }
+
+
     mutating func record(_ type: ProductEventType, previousState: Bool? = nil, newState: Bool? = nil, at date: Date = .now) {
         events.append(ProductEvent(date: date, type: type, previousState: previousState, newState: newState))
         if events.count > 50 {
