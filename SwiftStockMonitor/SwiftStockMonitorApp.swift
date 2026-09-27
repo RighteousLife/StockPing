@@ -443,7 +443,9 @@ struct ContentView: View {
     @State private var activeSheet: ContentSheet?
     @State private var isCheckSequenceRunning = false
     @State private var automaticCheckTimer: Timer?
+    @State private var currentTimerGeneration: UUID?
     @State private var pendingCheckContinuation: CheckedContinuation<Void, Never>?
+    @State private var checkSequenceTask: Task<Void, Never>?
     @StateObject private var networkMonitor = NetworkReachabilityMonitor.shared
 
     init() {
@@ -1153,6 +1155,8 @@ struct ContentView: View {
     private func stopAutomaticMonitoring() {
         automaticCheckTimer?.invalidate()
         automaticCheckTimer = nil
+        checkSequenceTask?.cancel()
+        checkSequenceTask = nil
     }
 
     private func runDueAutomaticChecks() {
@@ -1185,15 +1189,25 @@ struct ContentView: View {
             .min()
         guard let nextDate else { return }
 
-        automaticCheckTimer = Timer.scheduledTimer(
+        let timerGeneration = UUID()
+        currentTimerGeneration = timerGeneration
+        let timer = Timer.scheduledTimer(
             withTimeInterval: max(0.2, nextDate.timeIntervalSinceNow),
             repeats: false
         ) { _ in
             Task { @MainActor in
-                self.automaticCheckTimer = nil
+                // Only clear the reference if it's still the same timer generation.
+                // A rapid re-schedule could have replaced it already.
+                if self.currentTimerGeneration == timerGeneration {
+                    self.automaticCheckTimer = nil
+                    self.currentTimerGeneration = nil
+                }
                 self.runDueAutomaticChecks()
             }
         }
+        // Run in .common mode so the timer fires even during menu tracking.
+        RunLoop.main.add(timer, forMode: .common)
+        automaticCheckTimer = timer
     }
 
     private func startCheckSequence(for productIDs: [UUID]) {
@@ -1206,11 +1220,12 @@ struct ContentView: View {
         syncPowerPrevention()
         stopAutomaticMonitoring()
 
-        Task { @MainActor in
+        checkSequenceTask = Task { @MainActor in
             defer {
                 checkingProductID = nil
                 isChecking = false
                 isCheckSequenceRunning = false
+                checkSequenceTask = nil
                 refreshMenuBarSummary()
                 scheduleNextAutomaticCheck()
                 syncPowerPrevention()
@@ -1280,6 +1295,10 @@ struct ContentView: View {
     }
 
     private func completeCurrentCheck() {
+        // Guard against stale callbacks: if no check is in progress
+        // (e.g. it was already cancelled/timed-out and the sequence moved on),
+        // ignore this completion to prevent resuming the wrong continuation.
+        guard checkingProductID != nil else { return }
         TrackedProductStore.save(trackedProducts)
         checkingProductID = nil
         refreshMenuBarSummary()
@@ -2682,6 +2701,7 @@ private struct StorePageWebView: NSViewRepresentable {
         private var activeProviderCheckRequestID: Int?
         private var checkStartTime: Date?
         private let providerCheckSafetyTimeout: Duration = .seconds(40)
+        private var checksCompleted: Int = 0
 
         init(
             product: Binding<TrackedProduct>,
@@ -3074,6 +3094,15 @@ private struct StorePageWebView: NSViewRepresentable {
                     TimeInterval(product.wrappedValue.checkIntervalMinutes * 60)
                 )
             }
+            checksCompleted += 1
+            // Periodically clear WKWebView caches to prevent memory growth
+            // over long-running sessions (hundreds/thousands of navigations).
+            if checksCompleted % 50 == 0 {
+                WKWebsiteDataStore.default().removeData(
+                    ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
+                    modifiedSince: .distantPast
+                ) { }
+            }
             isChecking.wrappedValue = false
             onCheckComplete()
         }
@@ -3088,6 +3117,15 @@ private struct StorePageWebView: NSViewRepresentable {
         private func showError(_ message: String) {
             status.wrappedValue = "Bağlantı hatası"
             errorMessage.wrappedValue = message
+        }
+
+        /// Recover from WebKit content process crashes (jetsam, memory pressure).
+        /// Without this, the WebView silently goes blank and all future JS evaluations fail.
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            NSLog("[StockPing] WebKit content process terminated — reloading page.")
+            pageIsReady = false
+            pageLoadFailed = false
+            webView.reload()
         }
 
         private func schedulePageReadinessTimeout(for requestID: Int, provider: StoreProvider) {

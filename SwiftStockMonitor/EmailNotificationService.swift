@@ -147,9 +147,24 @@ final class EmailNotificationService: ObservableObject {
     }
 
     private static func dispatchMail(subject: String, content: String) async throws -> String {
-        try await Task.detached {
-            try executeAppleScript(subject: subject, content: content)
-        }.value
+        // Race the AppleScript execution against a 30-second timeout to prevent
+        // a hung Mail app from blocking the email queue indefinitely.
+        try await withThrowingTaskGroup(of: String.self) { group in
+            group.addTask {
+                try await Task.detached {
+                    try executeAppleScript(subject: subject, content: content)
+                }.value
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(30))
+                throw EmailNotificationError.sendFailed("Mail uygulaması 30 saniye içinde yanıt vermedi.")
+            }
+            // Return the first successful result (the AppleScript completion).
+            // If the timeout wins, it throws and cancels the other task.
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
+        }
     }
 
     private static nonisolated func executeAppleScript(subject: String, content: String) throws -> String {
