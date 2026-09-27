@@ -516,9 +516,6 @@ struct ContentView: View {
                             }
                             .menuStyle(.borderlessButton)
                             .help("Ürünleri duruma göre filtrele")
-                            Text("\(visibleTrackedProducts.count)/\(trackedProducts.count)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
                         }
                         .textCase(nil)
                     }
@@ -593,10 +590,12 @@ struct ContentView: View {
                             onDelete: { requestProductDeletion([trackedProducts[selectedProductIndex].id]) },
                             onIntervalChange: { updateCheckInterval($0, for: trackedProducts[selectedProductIndex].id) }
                         )
-                    } else {
+                    } else if trackedProducts.isEmpty {
                         EmptyProductsView {
                             activeSheet = .addProduct
                         }
+                    } else {
+                        NoSelectionView()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -608,10 +607,9 @@ struct ContentView: View {
                     Button {
                         exitSelectionMode()
                     } label: {
-                        Image(systemName: "xmark")
+                        Label("Seçim Modunu Kapat", systemImage: "xmark")
                     }
                     .help("Seçim modunu kapat")
-                    .accessibilityLabel("Seçim modunu kapat")
 
                     Menu {
                         Button("Tümünü Seç", systemImage: "checkmark.circle") {
@@ -623,17 +621,16 @@ struct ContentView: View {
                         }
                         .disabled(!visibleTrackedProducts.contains { selectedProductIDs.contains($0.id) } || isCheckSequenceRunning)
                     } label: {
-                        Label("Seçim", systemImage: "ellipsis.circle")
+                        Label("Seçim İşlemleri", systemImage: "ellipsis.circle")
                     }
                     .help("Seçim işlemleri")
 
                     Button(role: .destructive) {
                         requestProductDeletion(Array(selectedProductIDs))
                     } label: {
-                        Image(systemName: "trash")
+                        Label("Seçilenleri Sil", systemImage: "trash")
                     }
                     .help("Seçilen ürünleri sil")
-                    .accessibilityLabel("Seçilen ürünleri sil")
                     .disabled(selectedProductIDs.isEmpty || isCheckSequenceRunning)
                 } else {
                     Button {
@@ -651,7 +648,7 @@ struct ContentView: View {
                 } label: {
                     Label("Ürün Ekle", systemImage: "plus")
                 }
-                .help("Ürün Ekle")
+                .help("Ürün Ekle (⌘N)")
                 .disabled(isCheckSequenceRunning)
                 .keyboardShortcut("n", modifiers: .command)
 
@@ -665,7 +662,7 @@ struct ContentView: View {
                         Label("Şimdi Kontrol Et", systemImage: "arrow.clockwise")
                     }
                 }
-                .help("Şimdi Kontrol Et")
+                .help("Şimdi Kontrol Et (⌘R)")
                 .disabled(isCheckSequenceRunning || selectedProductIndex == nil)
                 .keyboardShortcut("r", modifiers: .command)
 
@@ -674,7 +671,7 @@ struct ContentView: View {
                 } label: {
                     Label("Şimdi Tümünü Kontrol Et", systemImage: "arrow.clockwise.circle")
                 }
-                .help("Şimdi Tümünü Kontrol Et")
+                .help("Şimdi Tümünü Kontrol Et (⇧⌘R)")
                 .disabled(isCheckSequenceRunning || trackedProducts.isEmpty)
                 .keyboardShortcut("r", modifiers: [.command, .shift])
 
@@ -1008,26 +1005,32 @@ private struct ProductSidebarRow: View {
     var body: some View {
         HStack(spacing: 9) {
             Image(systemName: status.symbol)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(status.color)
                 .frame(width: 16)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(product.productName)
                     .font(.body)
+                    .foregroundStyle(product.isPaused ? .secondary : .primary)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                Text("\(product.selectedVariant.displayDescription) · Her \(ProductCheckInterval.shortTitle(for: product.checkIntervalMinutes))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                HStack(spacing: 4) {
+                    Text(product.selectedVariant.displayDescription)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Text("·")
+                        .foregroundStyle(.tertiary)
+                    Text("Her \(ProductCheckInterval.shortTitle(for: product.checkIntervalMinutes))")
+                        .lineLimit(1)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
         }
         .padding(.vertical, 3)
         .contentShape(Rectangle())
     }
-
 }
 
 private struct ProductDetailView: View {
@@ -1047,207 +1050,179 @@ private struct ProductDetailView: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { timeline in
-          ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(product.productName)
-                        .font(.largeTitle.weight(.semibold))
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                        .id(product.id)
-
-                    HStack(spacing: 10) {
-                        StatusBadge(status: status)
-                        Text("Varyant · \(product.selectedVariant.displayDescription)")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Divider()
-
-                Grid(alignment: .leading, horizontalSpacing: 34, verticalSpacing: 14) {
-                    GridRow {
-                        detailLabel("Mağaza")
-                        Text(storeName(for: product))
-                    }
-                    GridRow {
-                        detailLabel("Son kontrol")
-                        if let lastChecked = product.lastChecked {
-                            Text(TurkishRelativeTime.string(from: lastChecked))
-                                .help(lastChecked.formatted(date: .long, time: .complete))
-                        } else {
-                            Text("Henüz kontrol yapılmadı")
-                        }
-                    }
-                    GridRow {
-                        detailLabel("Son stok değişikliği")
-                        if let event = latestStockChange {
-                            Text("\(TurkishRelativeTime.string(from: event.date)) · \(event.newState == true ? "Stokta" : "Stokta değil")")
-                                .help(event.date.formatted(date: .long, time: .complete))
-                        } else {
-                            Text("Henüz stok değişikliği yok")
-                        }
-                    }
-                    GridRow {
-                        detailLabel("Sonraki kontrol")
-                        Text(nextCheckDescription(at: timeline.date))
-                    }
-                    GridRow {
-                        detailLabel("Kontrol aralığı")
-                        Picker("", selection: Binding(
-                            get: { product.checkIntervalMinutes },
-                            set: onIntervalChange
-                        )) {
-                            ForEach(ProductCheckInterval.minutes, id: \.self) { minutes in
-                                Text(ProductCheckInterval.title(for: minutes)).tag(minutes)
-                            }
-                        }
-                        .labelsHidden()
-                        .disabled(!canChangeInterval)
-                        .help(canChangeInterval ? "Kontrol aralığını değiştir" : "Kontrol tamamlanınca kullanılabilir")
-                    }
-                    GridRow {
-                        detailLabel("Otomatik kontrol")
-                        Text(automaticCheckingEnabled ? "Uygulama açıkken etkin" : "Kapalı")
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 5) {
-                    Label(healthTitle, systemImage: healthSymbol)
-                        .font(.callout.weight(.medium))
-                        .foregroundStyle(healthColor)
-                    if let lastChecked = product.lastChecked {
-                        Text("Son kontrol denemesi: \(TurkishRelativeTime.string(from: lastChecked))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .help(lastChecked.formatted(date: .long, time: .complete))
-                    } else if status != .paused && status != .checking {
-                        Text("Henüz başarılı bir kontrol yok")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    if status != .checking, let checkError = product.lastCheckError {
-                        Text(checkError)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    // Header: Product Title & Status
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(product.productName)
+                            .font(.title2.weight(.semibold))
                             .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
+                            .textSelection(.enabled)
+                            .id(product.id)
 
-                Divider()
-
-                HStack(spacing: 12) {
-                    Button(action: onOpenProduct) {
-                        Label("Ürün Sayfasını Aç", systemImage: "arrow.up.right.square")
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button(role: .destructive, action: onDelete) {
-                        Label("Ürünü Sil", systemImage: "trash")
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(!canDelete)
-
-                    Link(destination: product.productURL) {
-                        Text(product.productURL.host() ?? "Shopify mağazası")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                }
-
-                DisclosureGroup(isExpanded: $isProductInformationExpanded) {
-                    productInformation
-                        .font(.callout)
-                        .padding(.top, 8)
-                } label: {
-                    Text("Ürün Bilgileri")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                        isProductInformationExpanded.toggle()
-                        }
-                }
-                .id(product.id)
-
-                Divider()
-
-                DisclosureGroup(isExpanded: $isChangeHistoryExpanded) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        if product.events.isEmpty {
-                            Text("Henüz bir değişiklik yok")
+                        HStack(spacing: 8) {
+                            StatusBadge(status: status)
+                            Text("·")
+                                .foregroundStyle(.tertiary)
+                            Text("Varyant: \(product.selectedVariant.displayDescription)")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(product.events.sorted { $0.date > $1.date }.prefix(10)) { event in
-                                HStack(alignment: .top, spacing: 9) {
-                                    Image(systemName: event.type.symbol)
-                                        .foregroundStyle(event.type.color)
-                                        .frame(width: 16)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(event.type.title)
-                                        Text(TurkishRelativeTime.string(from: event.date))
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .help(event.date.formatted(date: .long, time: .complete))
-                                    }
+                        }
+                    }
+
+                    // Action buttons
+                    HStack(spacing: 10) {
+                        Button(action: onOpenProduct) {
+                            Label("Ürün Sayfasını Aç", systemImage: "arrow.up.right.square")
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button(role: .destructive, action: onDelete) {
+                            Label("Ürünü Sil", systemImage: "trash")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!canDelete)
+                    }
+
+                    // Inline Error Warning (if present)
+                    if status == .error || product.lastCheckError != nil {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(.orange)
+                                .frame(width: 16, height: 16)
+                                .padding(.top, 1)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Kontrol uyarısı")
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(.primary)
+                                if let error = product.lastCheckError {
+                                    Text(error)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
-                                .font(.callout)
                             }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                    }
+
+                    Divider()
+
+                    // Primary Monitoring Grid
+                    Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 10) {
+                        GridRow {
+                            detailLabel("Mağaza")
+                            Text(storeName(for: product))
+                                .font(.callout)
+                        }
+                        GridRow {
+                            detailLabel("Sonraki kontrol")
+                            Text(nextCheckDescription(at: timeline.date))
+                                .font(.callout)
+                        }
+                        GridRow {
+                            detailLabel("Kontrol aralığı")
+                            Picker("", selection: Binding(
+                                get: { product.checkIntervalMinutes },
+                                set: onIntervalChange
+                            )) {
+                                ForEach(ProductCheckInterval.minutes, id: \.self) { minutes in
+                                    Text(ProductCheckInterval.title(for: minutes)).tag(minutes)
+                                }
+                            }
+                            .labelsHidden()
+                            .disabled(!canChangeInterval)
+                            .help(canChangeInterval ? "Kontrol aralığını değiştir" : "Kontrol tamamlanınca kullanılabilir")
+                        }
+                        GridRow {
+                            detailLabel("Son kontrol")
+                            if let lastChecked = product.lastChecked {
+                                Text(TurkishRelativeTime.string(from: lastChecked))
+                                    .font(.callout)
+                                    .help(lastChecked.formatted(date: .long, time: .complete))
+                            } else {
+                                Text("Henüz kontrol yapılmadı")
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        GridRow {
+                            detailLabel("Son stok değişimi")
+                            if let event = latestStockChange {
+                                Text("\(TurkishRelativeTime.string(from: event.date)) · \(event.newState == true ? "Stokta" : "Stokta değil")")
+                                    .font(.callout)
+                                    .help(event.date.formatted(date: .long, time: .complete))
+                            } else {
+                                Text("Henüz stok değişikliği yok")
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        GridRow {
+                            detailLabel("Otomatik kontrol")
+                            Text(automaticCheckingEnabled ? "Uygulama açıkken etkin" : "Kapalı")
+                                .font(.callout)
+                                .foregroundStyle(automaticCheckingEnabled ? .primary : .secondary)
+                        }
+                    }
+
+                    Divider()
+
+                    // Collapsible Section 1: Ürün Bilgileri
+                    DisclosureSection(
+                        title: "Ürün Bilgileri",
+                        isExpanded: $isProductInformationExpanded
+                    ) {
+                        productInformation
+                    }
+
+                    Divider()
+
+                    // Collapsible Section 2: Değişiklik Geçmişi
+                    DisclosureSection(
+                        title: "Değişiklik Geçmişi",
+                        isExpanded: $isChangeHistoryExpanded
+                    ) {
+                        historyContent
+                    }
+
+                    // Store connection status at the very bottom
+                    HStack(spacing: 6) {
+                        if storeConnectionStatus == "Bağlanıyor..." {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Circle()
+                                .fill(storeConnectionStatus == "Bağlandı ✓" ? Color.green : Color.orange)
+                                .frame(width: 6, height: 6)
+                        }
+                        Text("Store bağlantısı · \(storeConnectionStatus)")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                        if let storeConnectionError {
+                            Text("(\(storeConnectionError))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
                         }
                     }
                     .padding(.top, 4)
-                } label: {
-                    Text("Değişiklik Geçmişi")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                        isChangeHistoryExpanded.toggle()
-                        }
                 }
-                .onChange(of: product.id) { _, _ in
-                    isProductInformationExpanded = false
-                    isChangeHistoryExpanded = true
-                }
-
-                HStack(spacing: 8) {
-                    if storeConnectionStatus == "Bağlanıyor..." {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Circle()
-                            .fill(storeConnectionStatus == "Bağlandı ✓" ? Color.green : Color.orange)
-                            .frame(width: 7, height: 7)
-                    }
-                    Text("Store bağlantısı · \(storeConnectionStatus)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if let storeConnectionError {
-                        Text(storeConnectionError)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
-                }
-                .padding(.top, 2)
+                .frame(maxWidth: 680, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 20)
             }
-            .frame(maxWidth: 700, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .padding(32)
-          }
         }
-    }
-
-    private var healthTitle: String {
-        switch status {
-        case .paused: "Takip duraklatıldı"
-        case .checking: "Kontrol ediliyor..."
-        case .error: "Kontrol sorunu"
-        case .unchecked: "Henüz kontrol edilmedi"
-        case .inStock, .outOfStock: "Kontrol aktif"
+        .onChange(of: product.id) { _, _ in
+            isProductInformationExpanded = false
+            isChangeHistoryExpanded = true
         }
     }
 
@@ -1266,14 +1241,6 @@ private struct ProductDetailView: View {
             .max { $0.date < $1.date }
     }
 
-    private var healthSymbol: String {
-        status == .error ? "exclamationmark.triangle.fill" : status == .paused ? "pause.circle.fill" : "checkmark.circle"
-    }
-
-    private var healthColor: Color {
-        status == .error ? .orange : status == .paused ? .secondary : status == .checking ? .blue : .secondary
-    }
-
     private func nextCheckDescription(at now: Date) -> String {
         if status == .paused { return "Takip duraklatıldı" }
         if status == .checking { return "Kontrol ediliyor..." }
@@ -1290,59 +1257,119 @@ private struct ProductDetailView: View {
     }
 
     @ViewBuilder
+    private var historyContent: some View {
+        if product.events.isEmpty {
+            Text("Henüz bir değişiklik yok")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(product.events.sorted { $0.date > $1.date }.prefix(10)) { event in
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: event.type.symbol)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(event.type.color)
+                            .frame(width: 16, height: 16)
+                            .padding(.top, 1)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(event.type.title)
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(.primary)
+                            Text(TurkishRelativeTime.string(from: event.date))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .help(event.date.formatted(date: .long, time: .complete))
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(event.type.title), \(TurkishRelativeTime.string(from: event.date))")
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
     private var productInformation: some View {
-        Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 8) {
-            infoRow("Mağaza", storeName(for: product))
-            infoRow("Ürün", product.productName)
-            infoRow("URL", product.productURL.absoluteString)
+        Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 10) {
+            infoRow("URL", product.productURL.absoluteString, isURL: true)
             infoRow("Varyant", product.selectedVariant.displayDescription)
-            infoRow("Stok durumu", status.label)
-            infoRow("Kontrol aralığı", ProductCheckInterval.title(for: product.checkIntervalMinutes))
 
             switch product.provider {
             case .shopify:
-                infoRow("Variant ID", product.selectedVariant.id)
+                technicalRow("Variant ID", product.selectedVariant.id)
             case .zara:
                 if let metadata = product.zaraMetadata {
                     infoRow("Renk", metadata.colorName)
-                    infoRow("Color ID", metadata.colorID)
-                    infoRow("Color Product ID", metadata.colorProductID)
+                    technicalRow("Color ID", metadata.colorID)
+                    technicalRow("Color Product ID", metadata.colorProductID)
                     infoRow("Beden", product.selectedVariant.options.first(where: { $0.name == "Beden" })?.value ?? product.selectedVariant.title)
-                    infoRow("Availability SKU", metadata.availabilitySKU)
-                    if let sizeID = metadata.equivalentSizeID { infoRow("Equivalent size", sizeID) }
+                    technicalRow("Availability SKU", metadata.availabilitySKU)
+                    if let sizeID = metadata.equivalentSizeID { technicalRow("Equivalent size", sizeID) }
                 }
             case .bershka:
                 if let metadata = product.bershkaMetadata {
                     infoRow("Renk", metadata.colorName)
-                    infoRow("Color ID", metadata.colorID)
+                    technicalRow("Color ID", metadata.colorID)
                     infoRow("Beden", metadata.sizeName)
-                    infoRow("SKU", metadata.sku)
-                    if let partnumber = metadata.partnumber { infoRow("Part number", partnumber) }
-                    if let mastersSizeID = metadata.mastersSizeID { infoRow("Master size ID", mastersSizeID) }
+                    technicalRow("SKU", metadata.sku)
+                    if let partnumber = metadata.partnumber { technicalRow("Part number", partnumber) }
+                    if let mastersSizeID = metadata.mastersSizeID { technicalRow("Master size ID", mastersSizeID) }
                 }
             case .pullAndBear:
                 if let metadata = product.pullAndBearMetadata {
                     infoRow("Renk", metadata.colorName)
-                    if let colorParameter = metadata.colorParameter { infoRow("cS", colorParameter) }
+                    if let colorParameter = metadata.colorParameter { technicalRow("cS", colorParameter) }
                     infoRow("Beden", metadata.sizeName)
-                    if let colorReference = metadata.colorReference { infoRow("Renk referansı", colorReference) }
-                    if let pageProductID = metadata.pageProductID { infoRow("Ürün ID", pageProductID) }
+                    if let colorReference = metadata.colorReference { technicalRow("Renk referansı", colorReference) }
+                    if let pageProductID = metadata.pageProductID { technicalRow("Ürün ID", pageProductID) }
                 }
             }
         }
         .textSelection(.enabled)
     }
 
-    private func infoRow(_ title: String, _ value: String) -> some View {
+    private func detailLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .frame(width: 130, alignment: .leading)
+    }
+
+    private func infoRow(_ title: String, _ value: String, isURL: Bool = false) -> some View {
         GridRow {
-            Text(title).foregroundStyle(.secondary)
-            Text(value).textSelection(.enabled)
+            detailLabel(title)
+            if isURL {
+                HStack(spacing: 6) {
+                    Text(value)
+                        .font(.callout)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(value, forType: .string)
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("URL'yi kopyala")
+                }
+            } else {
+                Text(value)
+                    .font(.callout)
+            }
         }
     }
 
-    private func detailLabel(_ title: String) -> some View {
-        Text(title)
-            .foregroundStyle(.secondary)
+    private func technicalRow(_ title: String, _ value: String) -> some View {
+        GridRow {
+            detailLabel(title)
+            Text(value)
+                .font(.system(.callout, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
     }
 
     private func storeName(for product: TrackedProduct) -> String {
@@ -1351,6 +1378,39 @@ private struct ProductDetailView: View {
         case .bershka: "Bershka Türkiye"
         case .pullAndBear: "Pull&Bear Türkiye"
         case .shopify: product.productURL.host() ?? "Shopify mağazası"
+        }
+    }
+}
+
+private struct DisclosureSection<Content: View>: View {
+    let title: String
+    @Binding var isExpanded: Bool
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 12)
+                    Text(title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                content()
+            }
         }
     }
 }
@@ -1393,7 +1453,7 @@ private struct GlobalMonitoringStatusBar: View {
                 powerBadge
             }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 24)
         .padding(.vertical, 8)
         .background(.bar)
         .accessibilityElement(children: .combine)
@@ -1588,6 +1648,16 @@ private struct EmptyProductsView: View {
         } actions: {
             Button("Ürün Ekle", systemImage: "plus", action: onAddProduct)
                 .buttonStyle(.borderedProminent)
+        }
+    }
+}
+
+private struct NoSelectionView: View {
+    var body: some View {
+        ContentUnavailableView {
+            Label("Ürün Seçilmedi", systemImage: "sidebar.left")
+        } description: {
+            Text("Detayları görüntülemek için kenar çubuğundan bir ürün seçin.")
         }
     }
 }
