@@ -299,6 +299,10 @@ struct TrackedProduct: Identifiable {
         )
     }
 
+    func periodMetrics(for period: StockAnalyticsPeriod, referenceDate: Date = .now) -> StockPeriodMetrics {
+        stockStatistics.periodMetrics(for: period, allEvents: events, referenceDate: referenceDate)
+    }
+
 
     mutating func record(_ type: ProductEventType, previousState: Bool? = nil, newState: Bool? = nil, at date: Date = .now) {
         events.append(ProductEvent(date: date, type: type, previousState: previousState, newState: newState))

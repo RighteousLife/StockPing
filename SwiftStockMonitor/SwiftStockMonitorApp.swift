@@ -114,12 +114,25 @@ extension SwiftStockAppDelegate: UNUserNotificationCenterDelegate {
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        let urlString = response.notification.request.content.userInfo["productURL"] as? String
+        let userInfo = response.notification.request.content.userInfo
+        let productIDString = userInfo["productID"] as? String
+        let urlString = userInfo["productURL"] as? String
         completionHandler()
-        guard let urlString,
-              let url = URL(string: urlString),
-              ["https", "http"].contains(url.scheme?.lowercased() ?? "") else { return }
+
         Task { @MainActor in
+            var targetURL: URL?
+            if let productIDString, let productID = UUID(uuidString: productIDString) {
+                let savedProducts = TrackedProductStore.load()
+                if let product = savedProducts.first(where: { $0.id == productID }) {
+                    targetURL = product.productURL
+                }
+            }
+            if targetURL == nil, let urlString, let fallbackURL = URL(string: urlString) {
+                targetURL = fallbackURL
+            }
+
+            guard let url = targetURL,
+                  ["https", "http"].contains(url.scheme?.lowercased() ?? "") else { return }
             NSWorkspace.shared.open(url)
         }
     }
@@ -132,14 +145,22 @@ private final class SwiftStockMenuBarState: ObservableObject {
     @Published var outOfStockCount = 0
     @Published var unknownStockCount = 0
     @Published var pausedCount = 0
+    @Published var priorityCount = 0
     @Published var errorCount = 0
+    @Published var isChecking = false
+    @Published var isAllPaused = false
     @Published var lastCheckedText = "Henüz kontrol yapılmadı"
+    @Published var recentStockMovements: [MenuBarStockMovement] = []
     @Published private(set) var manualCheckRequestID = 0
+    @Published var selectedProductToOpen: UUID? = nil
 
     func requestManualCheck() {
         manualCheckRequestID += 1
     }
 
+    func selectProductAndOpen(_ id: UUID) {
+        selectedProductToOpen = id
+    }
 }
 
 @MainActor
@@ -208,39 +229,80 @@ private final class CloseToHideWindowDelegate: NSObject, NSWindowDelegate {
 private struct SwiftStockMenuBarContent: View {
     @EnvironmentObject private var menuBarState: SwiftStockMenuBarState
     @EnvironmentObject private var windowController: MainWindowController
+    @ObservedObject private var networkMonitor = NetworkReachabilityMonitor.shared
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         Text("StockPing")
             .font(.headline)
-        Text("\(menuBarState.productCount) ürün takip ediliyor")
-        Text("\(menuBarState.inStockCount) ürün stokta")
-        Text("\(menuBarState.outOfStockCount) ürün stokta değil")
-        if menuBarState.unknownStockCount > 0 {
-            Text("\(menuBarState.unknownStockCount) ürünün durumu bilinmiyor")
+
+        if networkMonitor.status == .unavailable {
+            Text("⚠️ Ağ bağlantısı yok (Kontroller duraklatıldı)")
+        } else if networkMonitor.status == .recovering {
+            Text("🔄 Ağ bağlantısı bekleniyor...")
+        } else if menuBarState.isChecking {
+            Text("⏳ Kontroller yapılıyor...")
+        } else if menuBarState.isAllPaused {
+            Text("⏸️ Tüm takipler duraklatıldı")
+        } else {
+            Text("● \(menuBarState.productCount) ürün izleniyor")
         }
+
+        Divider()
+
+        Text("Stokta: \(menuBarState.inStockCount)")
+        Text("Stok dışı: \(menuBarState.outOfStockCount)")
         if menuBarState.pausedCount > 0 {
-            Text("\(menuBarState.pausedCount) ürün duraklatıldı")
+            Text("Duraklatıldı: \(menuBarState.pausedCount)")
+        }
+        if menuBarState.priorityCount > 0 {
+            Text("Öncelikli: \(menuBarState.priorityCount)")
         }
         if menuBarState.errorCount > 0 {
-            Text("\(menuBarState.errorCount) üründe kontrol hatası var")
+            Text("Hata: \(menuBarState.errorCount)")
         }
         Text("Son kontrol: \(menuBarState.lastCheckedText)")
             .font(.caption)
 
         Divider()
 
-        Button("Uygulamayı Aç", systemImage: "macwindow") {
+        Text("Son stok hareketleri")
+            .font(.subheadline)
+
+        if menuBarState.recentStockMovements.isEmpty {
+            Text("Henüz stok hareketi yok")
+                .foregroundStyle(.secondary)
+        } else {
+            ForEach(menuBarState.recentStockMovements) { movement in
+                Button {
+                    NSApp.activate(ignoringOtherApps: true)
+                    if !windowController.showMainWindow() {
+                        openWindow(id: "main")
+                    }
+                    menuBarState.selectProductAndOpen(movement.productID)
+                } label: {
+                    Text("\(movement.productName) — \(movement.eventTitle) • \(movement.relativeTime)")
+                }
+            }
+        }
+
+        Divider()
+
+        Button("StockPing'i Aç", systemImage: "macwindow") {
+            NSApp.activate(ignoringOtherApps: true)
             if !windowController.showMainWindow() {
                 openWindow(id: "main")
             }
         }
+
         Button("Şimdi Tümünü Kontrol Et", systemImage: "arrow.clockwise") {
             menuBarState.requestManualCheck()
         }
-        .disabled(!NetworkReachabilityMonitor.shared.canProceedWithChecks)
-        Button("Ayarlar", systemImage: "gearshape") {
+        .disabled(!networkMonitor.canProceedWithChecks || menuBarState.isChecking)
+
+        Button("Ayarlar…", systemImage: "gearshape") {
+            NSApp.activate(ignoringOtherApps: true)
             openSettings()
         }
 
@@ -1161,6 +1223,12 @@ struct ContentView: View {
         .onChange(of: menuBarState.manualCheckRequestID) { _, _ in
             startManualCheckAll()
         }
+        .onChange(of: menuBarState.selectedProductToOpen) { _, productID in
+            guard let productID else { return }
+            if trackedProducts.contains(where: { $0.id == productID }) {
+                selectedProductID = productID
+            }
+        }
         .onChange(of: networkMonitor.status) { oldStatus, newStatus in
             if newStatus == .available && oldStatus != .available {
                 print("[NetworkGuard] Ağ bağlantısı hazır ve stabilize oldu. Bekleyen kontroller yürütülüyor.")
@@ -1405,10 +1473,30 @@ struct ContentView: View {
         menuBarState.unknownStockCount = statuses.filter { $0 == .unchecked || $0 == .checking }.count
         menuBarState.pausedCount = statuses.filter { $0 == .paused }.count
         menuBarState.errorCount = statuses.filter { $0 == .error }.count
+        menuBarState.priorityCount = trackedProducts.filter(\.isPriority).count
+        menuBarState.isChecking = isCheckSequenceRunning || checkingProductID != nil
+        menuBarState.isAllPaused = !trackedProducts.isEmpty && trackedProducts.allSatisfy(\.isPaused)
 
         let latestCheck = trackedProducts.compactMap(\.lastChecked).max()
         menuBarState.lastCheckedText = latestCheck?.formatted(date: .abbreviated, time: .shortened)
             ?? "Henüz kontrol yapılmadı"
+
+        var movements: [MenuBarStockMovement] = []
+        for product in trackedProducts {
+            for event in product.events {
+                if event.type == .stockArrived || event.type == .stockDepleted {
+                    movements.append(MenuBarStockMovement(
+                        id: event.id,
+                        productID: product.id,
+                        productName: product.productName,
+                        eventType: event.type,
+                        date: event.date
+                    ))
+                }
+            }
+        }
+        movements.sort { $0.date > $1.date }
+        menuBarState.recentStockMovements = Array(movements.prefix(5))
     }
 
     private func setPaused(_ isPaused: Bool, for productID: UUID) {
@@ -1442,6 +1530,7 @@ struct ContentView: View {
         guard let index = trackedProducts.firstIndex(where: { $0.id == productID }) else { return }
         trackedProducts[index].isPriority.toggle()
         TrackedProductStore.save(trackedProducts)
+        refreshMenuBarSummary()
     }
 
     private func updateNote(_ note: String?, for productID: UUID) {
@@ -1688,6 +1777,7 @@ private struct ProductDetailView: View {
     @State private var showingNoteAlert = false
     @State private var noteDraftText = ""
     @State private var historyDisplayMode: HistoryDisplayMode = .stockSessions
+    @State private var selectedAnalyticsPeriod: StockAnalyticsPeriod = .sevenDays
     @AppStorage("adaptiveMonitoringEnabled") private var adaptiveMonitoringEnabled = false
 
     @ObservedObject private var orgStore = ProductOrganizationStore.shared
@@ -2111,6 +2201,7 @@ private struct ProductDetailView: View {
             isDiagnosticExpanded = false
             isNotificationAuditExpanded = false
             copiedDiagnosticFeedback = false
+            selectedAnalyticsPeriod = .sevenDays
         }
         .alert("Yeni Grup Oluştur", isPresented: $showingNewGroupAlert) {
             TextField("Grup adı", text: $newGroupName)
@@ -2225,90 +2316,111 @@ private struct ProductDetailView: View {
     @ViewBuilder
     private var stockStatisticsContent: some View {
         let stats = product.stockStatistics
-        if !stats.hasStockHistory {
-            Text("Henüz stok geçmişi oluşmadı.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        } else {
-            VStack(alignment: .leading, spacing: 14) {
-                Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 10) {
-                    if let lastChange = stats.lastStockChangeDate {
-                        GridRow {
-                            detailLabel("Son stok değişimi")
-                            Text(TurkishRelativeTime.string(from: lastChange))
-                                .font(.callout)
-                                .help(lastChange.formatted(date: .long, time: .complete))
-                        }
-                    }
+        let metrics = product.periodMetrics(for: selectedAnalyticsPeriod)
 
-                    if stats.isCurrentlyInStock {
-                        GridRow {
-                            detailLabel("Son stokta bulunma")
+        VStack(alignment: .leading, spacing: 14) {
+            Picker("Dönem", selection: $selectedAnalyticsPeriod) {
+                ForEach(StockAnalyticsPeriod.allCases) { period in
+                    Text(period.title).tag(period)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            if !stats.hasStockHistory || !metrics.hasSufficientData {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Yeterli geçmiş verisi yok")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.primary)
+                    Text("Bu ürün için henüz yeterli stok değişikliği kaydedilmedi.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 4)
+            } else {
+                Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 10) {
+                    GridRow {
+                        detailLabel("Mevcut durum")
+                        if metrics.isCurrentlyInStock {
                             HStack(spacing: 5) {
                                 Circle()
                                     .fill(Color.green)
                                     .frame(width: 6, height: 6)
-                                Text("Şu an stokta")
+                                Text("Stokta")
                                     .font(.callout.weight(.medium))
                                     .foregroundStyle(.green)
                             }
-                        }
-                    } else if let lastInStock = stats.lastInStockDate {
-                        GridRow {
-                            detailLabel("Son stokta bulunma")
-                            Text(TurkishRelativeTime.string(from: lastInStock))
-                                .font(.callout)
-                                .help(lastInStock.formatted(date: .long, time: .complete))
-                        }
-                    }
-
-                    if stats.totalRestockCount > 0 {
-                        GridRow {
-                            detailLabel("Toplam restock")
-                            Text("\(stats.totalRestockCount)")
-                                .font(.callout)
-                        }
-                        GridRow {
-                            detailLabel("Son 30 gün")
-                            Text("\(stats.recentRestockCount30Days)")
-                                .font(.callout)
+                        } else {
+                            HStack(spacing: 5) {
+                                Circle()
+                                    .fill(Color.secondary)
+                                    .frame(width: 6, height: 6)
+                                Text("Stok dışı")
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
 
-                    if let latestDurationDesc = stats.latestInStockDurationDescription {
-                        GridRow {
-                            detailLabel("Son stokta kalma")
-                            Text(latestDurationDesc)
-                                .font(.callout)
-                        }
+                    GridRow {
+                        detailLabel("Restock")
+                        Text("\(metrics.restockCount)")
+                            .font(.callout.weight(.medium))
                     }
 
-                    if let avgDesc = stats.formattedAverageDuration {
-                        GridRow {
-                            detailLabel("Ortalama stokta kalma")
-                            Text(avgDesc)
+                    GridRow {
+                        detailLabel("Toplam stokta")
+                        Text(metrics.formattedTotalDuration)
+                            .font(.callout)
+                    }
+
+                    GridRow {
+                        detailLabel("Ortalama stokta kalma")
+                        if let avg = metrics.formattedAverageDuration {
+                            Text(avg)
                                 .font(.callout)
-                        }
-                    } else if stats.totalRestockCount > 0 && stats.completedIntervals.isEmpty {
-                        GridRow {
-                            detailLabel("Ortalama stokta kalma")
-                            Text("Yeterli veri yok")
+                        } else if metrics.isCurrentlyInStock && metrics.ongoingInterval != nil {
+                            Text("Devam ediyor")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("—")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
                         }
                     }
 
-                    if stats.completedIntervals.count >= 2,
-                       let minDesc = stats.formattedMinDuration,
-                       let maxDesc = stats.formattedMaxDuration {
+                    GridRow {
+                        detailLabel("Son restock")
+                        if let last = metrics.lastRestockDate {
+                            Text(TurkishRelativeTime.string(from: last))
+                                .font(.callout)
+                                .help(last.formatted(date: .long, time: .complete))
+                        } else {
+                            Text("Bu dönemde restock yok")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    GridRow {
+                        detailLabel("Veri aralığı")
+                        Text(metrics.dataCoverageDescription)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if metrics.completedIntervals.count >= 2,
+                       let minDuration = metrics.completedIntervals.compactMap(\.duration).min(),
+                       let maxDuration = metrics.completedIntervals.compactMap(\.duration).max() {
                         GridRow {
                             detailLabel("En uzun stokta kalma")
-                            Text(maxDesc)
+                            Text(StockDurationFormatter.format(seconds: maxDuration))
                                 .font(.callout)
                         }
                         GridRow {
                             detailLabel("En kısa stokta kalma")
-                            Text(minDesc)
+                            Text(StockDurationFormatter.format(seconds: minDuration))
                                 .font(.callout)
                         }
                     }
@@ -3934,7 +4046,10 @@ private final class StockNotificationManager {
                     content.title = "Stok geldi! 🎉"
                     content.body = "\(notice.productName) — \(notice.variantTitle) artık stokta."
                     content.sound = .default
-                    content.userInfo = ["productURL": notice.productURL.absoluteString]
+                    content.userInfo = [
+                        "productID": notice.productID.uuidString,
+                        "productURL": notice.productURL.absoluteString
+                    ]
 
                     let request = UNNotificationRequest(
                         identifier: UUID().uuidString,

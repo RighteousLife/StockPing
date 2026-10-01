@@ -56,6 +56,30 @@ struct ProductEvent: Codable, Identifiable, Sendable {
     }
 }
 
+struct MenuBarStockMovement: Identifiable, Sendable, Equatable {
+    let id: UUID
+    let productID: UUID
+    let productName: String
+    let eventType: ProductEventType
+    let date: Date
+
+    var eventTitle: String {
+        switch eventType {
+        case .stockArrived: return "Stokta"
+        case .stockDepleted: return "Stok dışı"
+        default: return eventType.title
+        }
+    }
+
+    var relativeTime: String {
+        TurkishRelativeTime.string(from: date)
+    }
+
+    func relativeTime(at now: Date) -> String {
+        TurkishRelativeTime.string(from: date, now: now)
+    }
+}
+
 struct StockInterval: Equatable, Sendable, Identifiable {
     var id: UUID = UUID()
     let startDate: Date
@@ -239,4 +263,112 @@ struct StockStatistics: Equatable, Sendable {
         )
     }
 }
+
+enum StockAnalyticsPeriod: Int, CaseIterable, Identifiable, Sendable {
+    case sevenDays = 7
+    case thirtyDays = 30
+    case ninetyDays = 90
+
+    var id: Int { rawValue }
+
+    var title: String {
+        switch self {
+        case .sevenDays: return "7 Gün"
+        case .thirtyDays: return "30 Gün"
+        case .ninetyDays: return "90 Gün"
+        }
+    }
+
+    var days: Int { rawValue }
+}
+
+struct StockPeriodMetrics: Equatable, Sendable {
+    let period: StockAnalyticsPeriod
+    let restockCount: Int
+    let completedIntervals: [StockInterval]
+    let ongoingInterval: StockInterval?
+    let totalStockDuration: TimeInterval
+    let averageStockDuration: TimeInterval?
+    let lastRestockDate: Date?
+    let isCurrentlyInStock: Bool
+    let earliestCoveredDate: Date?
+    let dataCoverageDescription: String
+    let hasSufficientData: Bool
+
+    var formattedTotalDuration: String {
+        totalStockDuration > 0 ? StockDurationFormatter.format(seconds: totalStockDuration) : "0 dk"
+    }
+
+    var formattedAverageDuration: String? {
+        averageStockDuration.map { StockDurationFormatter.format(seconds: $0) }
+    }
+}
+
+extension StockStatistics {
+    func periodMetrics(
+        for period: StockAnalyticsPeriod,
+        allEvents: [ProductEvent],
+        referenceDate: Date = .now
+    ) -> StockPeriodMetrics {
+        let periodStart = referenceDate.addingTimeInterval(-Double(period.days * 24 * 3600))
+
+        let allStockEvents = allEvents.filter { $0.type == .stockArrived || $0.type == .stockDepleted }
+        let earliestDate = allStockEvents.map(\.date).min()
+
+        let dataCoverageDescription: String
+        let hasSufficientData: Bool
+
+        if let earliestDate {
+            hasSufficientData = true
+            let daysSinceEarliest = max(1, Int(ceil(referenceDate.timeIntervalSince(earliestDate) / 86400.0)))
+            if daysSinceEarliest < period.days {
+                dataCoverageDescription = "Son \(daysSinceEarliest) günlük veri mevcut (\(period.title) hedefleniyor)"
+            } else {
+                dataCoverageDescription = "\(period.title) kapsanıyor"
+            }
+        } else {
+            hasSufficientData = false
+            dataCoverageDescription = "Yeterli geçmiş verisi yok"
+        }
+
+        // Restocks within the period
+        let periodRestocks = allStockEvents.filter { $0.type == .stockArrived && $0.date >= periodStart }
+        let restockCount = periodRestocks.count
+        let lastRestockDate = periodRestocks.sorted(by: { $0.date < $1.date }).last?.date
+
+        // Completed intervals starting within the period
+        let periodCompleted = completedIntervals.filter { $0.startDate >= periodStart }
+
+        // Ongoing interval if active within the period
+        let periodOngoing: StockInterval?
+        if let ongoing = ongoingInterval, ongoing.startDate >= periodStart {
+            periodOngoing = ongoing
+        } else {
+            periodOngoing = nil
+        }
+
+        // Durations
+        let completedDurations = periodCompleted.compactMap { $0.duration }
+        let completedTotal = completedDurations.reduce(0, +)
+        let ongoingDuration = periodOngoing.map { max(0, referenceDate.timeIntervalSince($0.startDate)) } ?? 0
+        let totalStockDuration = completedTotal + ongoingDuration
+
+        let averageStockDuration: TimeInterval? = completedDurations.isEmpty ? nil : (completedDurations.reduce(0, +) / Double(completedDurations.count))
+
+        return StockPeriodMetrics(
+            period: period,
+            restockCount: restockCount,
+            completedIntervals: periodCompleted,
+            ongoingInterval: periodOngoing,
+            totalStockDuration: totalStockDuration,
+            averageStockDuration: averageStockDuration,
+            lastRestockDate: lastRestockDate,
+            isCurrentlyInStock: isCurrentlyInStock,
+            earliestCoveredDate: earliestDate,
+            dataCoverageDescription: dataCoverageDescription,
+            hasSufficientData: hasSufficientData && hasStockHistory
+        )
+    }
+}
+
 
