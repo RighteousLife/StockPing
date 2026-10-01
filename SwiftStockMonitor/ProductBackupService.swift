@@ -28,6 +28,8 @@ struct StockPingExportProduct: Codable {
     var note: String?
     var isMacOSNotificationEnabled: Bool?
     var isEmailNotificationEnabled: Bool?
+    var notificationProfile: NotificationProfile?
+    var autoOpenOnRestock: Bool?
 
     init(from product: TrackedProduct) {
         self.id = product.id
@@ -46,6 +48,8 @@ struct StockPingExportProduct: Codable {
         self.note = product.note
         self.isMacOSNotificationEnabled = product.isMacOSNotificationEnabled ? nil : false
         self.isEmailNotificationEnabled = product.isEmailNotificationEnabled ? nil : false
+        self.notificationProfile = product.notificationProfile == .standard ? nil : product.notificationProfile
+        self.autoOpenOnRestock = product.autoOpenOnRestock
     }
 
     var trackedProduct: TrackedProduct {
@@ -73,7 +77,9 @@ struct StockPingExportProduct: Codable {
             isPriority: isPriority ?? false,
             note: note,
             isMacOSNotificationEnabled: isMacOSNotificationEnabled ?? true,
-            isEmailNotificationEnabled: isEmailNotificationEnabled ?? true
+            isEmailNotificationEnabled: isEmailNotificationEnabled ?? true,
+            notificationProfile: notificationProfile ?? .standard,
+            autoOpenOnRestock: autoOpenOnRestock
         )
     }
 }

@@ -151,6 +151,8 @@ private final class SwiftStockMenuBarState: ObservableObject {
     @Published var isAllPaused = false
     @Published var lastCheckedText = "Henüz kontrol yapılmadı"
     @Published var recentStockMovements: [MenuBarStockMovement] = []
+    @Published var providerHealthText = "Tüm mağazalar normal"
+    @Published var scheduleStatusText: String? = nil
     @Published private(set) var manualCheckRequestID = 0
     @Published var selectedProductToOpen: UUID? = nil
 
@@ -263,6 +265,12 @@ private struct SwiftStockMenuBarContent: View {
             Text("Hata: \(menuBarState.errorCount)")
         }
         Text("Son kontrol: \(menuBarState.lastCheckedText)")
+            .font(.caption)
+        if let schedText = menuBarState.scheduleStatusText {
+            Text("⏰ \(schedText)")
+                .font(.caption)
+        }
+        Text("🏪 \(menuBarState.providerHealthText)")
             .font(.caption)
 
         Divider()
@@ -487,6 +495,28 @@ struct ContentView: View {
     @AppStorage("emailNotificationsEnabled") private var emailNotificationsEnabled = false
     @AppStorage("monitoringPowerMode") private var monitoringPowerMode: MonitoringPowerMode = .allowDisplaySleepKeepMacAwake
     @AppStorage("adaptiveMonitoringEnabled") private var adaptiveMonitoringEnabled = false
+    @AppStorage("monitoringScheduleEnabled") private var monitoringScheduleEnabled = false
+    @AppStorage("monitoringScheduleStartHour") private var monitoringScheduleStartHour = 9
+    @AppStorage("monitoringScheduleStartMinute") private var monitoringScheduleStartMinute = 0
+    @AppStorage("monitoringScheduleEndHour") private var monitoringScheduleEndHour = 23
+    @AppStorage("monitoringScheduleEndMinute") private var monitoringScheduleEndMinute = 0
+    @AppStorage("monitoringScheduleWeekdays") private var monitoringScheduleWeekdays = "1,2,3,4,5,6,7"
+    @AppStorage("autoOpenOnRestockEnabled") private var autoOpenOnRestockEnabled = false
+
+    private var currentMonitoringSchedule: MonitoringSchedule {
+        let weekdayInts = monitoringScheduleWeekdays
+            .split(separator: ",")
+            .compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+        let allowedSet = weekdayInts.isEmpty ? Set(1...7) : Set(weekdayInts)
+        return MonitoringSchedule(
+            isEnabled: monitoringScheduleEnabled,
+            startHour: monitoringScheduleStartHour,
+            startMinute: monitoringScheduleStartMinute,
+            endHour: monitoringScheduleEndHour,
+            endMinute: monitoringScheduleEndMinute,
+            allowedWeekdays: allowedSet
+        )
+    }
     @State private var trackedProducts: [TrackedProduct]
     @State private var selectedProductID: UUID
     @State private var isSelectionMode = false
@@ -1004,7 +1034,9 @@ struct ContentView: View {
                             onTogglePriority: { togglePriority(for: trackedProducts[selectedProductIndex].id) },
                             onUpdateNote: { updateNote($0, for: trackedProducts[selectedProductIndex].id) },
                             onToggleMacOSNotification: { toggleMacOSNotification(for: trackedProducts[selectedProductIndex].id) },
-                            onToggleEmailNotification: { toggleEmailNotification(for: trackedProducts[selectedProductIndex].id) }
+                            onToggleEmailNotification: { toggleEmailNotification(for: trackedProducts[selectedProductIndex].id) },
+                            onNotificationProfileChange: { updateNotificationProfile($0, for: trackedProducts[selectedProductIndex].id) },
+                            onAutoOpenChange: { updateAutoOpenOnRestock($0, for: trackedProducts[selectedProductIndex].id) }
                         )
                     } else if trackedProducts.isEmpty {
                         EmptyProductsView {
@@ -1143,6 +1175,7 @@ struct ContentView: View {
                     notificationsEnabled: stockNotificationsEnabled,
                     emailNotificationsEnabled: emailNotificationsEnabled,
                     adaptiveMonitoringEnabled: adaptiveMonitoringEnabled,
+                    autoOpenOnRestockEnabled: autoOpenOnRestockEnabled,
                     onCheckComplete: completeCurrentCheck
                 )
                 .frame(
@@ -1305,6 +1338,10 @@ struct ContentView: View {
     private func runDueAutomaticChecks() {
         guard automaticCheckingEnabled else { return }
         guard !isCheckSequenceRunning else { return }
+        if monitoringScheduleEnabled && !currentMonitoringSchedule.isActive() {
+            scheduleNextAutomaticCheck()
+            return
+        }
         guard networkMonitor.canProceedWithChecks else {
             print("[NetworkGuard] Ağ bağlantısı hazır değil, otomatik kontroller ertelendi.")
             return
@@ -1325,6 +1362,29 @@ struct ContentView: View {
         automaticCheckTimer = nil
         guard automaticCheckingEnabled, !isCheckSequenceRunning else { return }
         guard networkMonitor.canProceedWithChecks else { return }
+
+        let schedule = currentMonitoringSchedule
+        if monitoringScheduleEnabled && !schedule.isActive() {
+            guard let nextStart = schedule.nextStartDate() else { return }
+            let interval = max(1.0, nextStart.timeIntervalSinceNow)
+            let timerGeneration = UUID()
+            currentTimerGeneration = timerGeneration
+            let timer = Timer.scheduledTimer(
+                withTimeInterval: interval,
+                repeats: false
+            ) { _ in
+                Task { @MainActor in
+                    if self.currentTimerGeneration == timerGeneration {
+                        self.automaticCheckTimer = nil
+                        self.currentTimerGeneration = nil
+                    }
+                    self.runDueAutomaticChecks()
+                }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            automaticCheckTimer = timer
+            return
+        }
 
         let nextDate = trackedProducts
             .filter { !$0.isPaused }
@@ -1497,6 +1557,32 @@ struct ContentView: View {
         }
         movements.sort { $0.date > $1.date }
         menuBarState.recentStockMovements = Array(movements.prefix(5))
+
+        let providerSummaries = ProviderHealthSummary.allSummaries(for: trackedProducts, isNetworkAvailable: networkMonitor.canProceedWithChecks)
+        let warningCount = providerSummaries.filter { $0.health == .warning }.count
+        if !networkMonitor.canProceedWithChecks {
+            menuBarState.providerHealthText = "Ağ bağlantısı yok"
+        } else if warningCount > 0 {
+            menuBarState.providerHealthText = "\(warningCount) mağazada uyarı"
+        } else {
+            menuBarState.providerHealthText = "Tüm mağazalar normal"
+        }
+
+        if monitoringScheduleEnabled {
+            let sched = currentMonitoringSchedule
+            if !sched.isActive() {
+                if let nextStart = sched.nextStartDate() {
+                    let timeStr = nextStart.formatted(date: .omitted, time: .shortened)
+                    menuBarState.scheduleStatusText = "Planlama dışı (Başlangıç: \(timeStr))"
+                } else {
+                    menuBarState.scheduleStatusText = "Planlama dışı"
+                }
+            } else {
+                menuBarState.scheduleStatusText = nil
+            }
+        } else {
+            menuBarState.scheduleStatusText = nil
+        }
     }
 
     private func setPaused(_ isPaused: Bool, for productID: UUID) {
@@ -1548,6 +1634,18 @@ struct ContentView: View {
     private func toggleEmailNotification(for productID: UUID) {
         guard let index = trackedProducts.firstIndex(where: { $0.id == productID }) else { return }
         trackedProducts[index].isEmailNotificationEnabled.toggle()
+        TrackedProductStore.save(trackedProducts)
+    }
+
+    private func updateNotificationProfile(_ profile: NotificationProfile, for productID: UUID) {
+        guard let index = trackedProducts.firstIndex(where: { $0.id == productID }) else { return }
+        trackedProducts[index].notificationProfile = profile
+        TrackedProductStore.save(trackedProducts)
+    }
+
+    private func updateAutoOpenOnRestock(_ autoOpen: Bool?, for productID: UUID) {
+        guard let index = trackedProducts.firstIndex(where: { $0.id == productID }) else { return }
+        trackedProducts[index].autoOpenOnRestock = autoOpen
         TrackedProductStore.save(trackedProducts)
     }
 
@@ -1801,6 +1899,8 @@ private struct ProductDetailView: View {
     let onUpdateNote: (String?) -> Void
     let onToggleMacOSNotification: () -> Void
     let onToggleEmailNotification: () -> Void
+    let onNotificationProfileChange: (NotificationProfile) -> Void
+    let onAutoOpenChange: (Bool?) -> Void
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { timeline in
@@ -2135,6 +2235,30 @@ private struct ProductDetailView: View {
                                     .font(.callout)
                                     .foregroundStyle(product.isEmailNotificationEnabled ? .primary : .secondary)
                             }
+                        }
+                        GridRow {
+                            detailLabel("Bildirim Profili")
+                            Picker("", selection: Binding(
+                                get: { product.notificationProfile },
+                                set: onNotificationProfileChange
+                            )) {
+                                ForEach(NotificationProfile.allCases, id: \.self) { profile in
+                                    Text(profile.shortTitle).tag(profile)
+                                }
+                            }
+                            .labelsHidden()
+                        }
+                        GridRow {
+                            detailLabel("Stokta Otomatik Aç")
+                            Picker("", selection: Binding(
+                                get: { product.autoOpenOnRestock },
+                                set: onAutoOpenChange
+                            )) {
+                                Text("Varsayılan (Genel Ayar)").tag(nil as Bool?)
+                                Text("Her Zaman Aç").tag(true as Bool?)
+                                Text("Asla Açma").tag(false as Bool?)
+                            }
+                            .labelsHidden()
                         }
                     }
 
@@ -3216,6 +3340,7 @@ private struct EmptyProductsView: View {
 
 private struct MonitoringDashboardView: View {
     let products: [TrackedProduct]
+    var isNetworkAvailable: Bool = NetworkReachabilityMonitor.shared.canProceedWithChecks
     let onSelectProduct: (UUID) -> Void
     let onAddProduct: () -> Void
 
@@ -3301,6 +3426,52 @@ private struct MonitoringDashboardView: View {
                     dashboardCard(title: "Stokta Değil", value: "\(outOfStockCount)", icon: "xmark.circle.fill", color: .orange)
                     dashboardCard(title: "Duraklatıldı", value: "\(pausedCount)", icon: "pause.circle.fill", color: .secondary)
                     dashboardCard(title: "Öncelikli", value: "\(priorityCount)", icon: "star.fill", color: .yellow)
+                }
+
+                Divider()
+
+                // Provider Status Center section
+                VStack(alignment: .leading, spacing: 12) {
+                    Label("Mağaza Durumu", systemImage: "server.rack")
+                        .font(.headline)
+
+                    let summaries = ProviderHealthSummary.allSummaries(for: products, isNetworkAvailable: isNetworkAvailable)
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 12)], spacing: 12) {
+                        ForEach(summaries) { summary in
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Image(systemName: summary.health.symbol)
+                                        .foregroundStyle(summary.health.color)
+                                    Text(summary.provider.displayName)
+                                        .font(.subheadline.weight(.semibold))
+                                    Spacer()
+                                }
+                                Text(summary.health.title)
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(summary.health.color)
+
+                                HStack(spacing: 4) {
+                                    Text("\(summary.productCount) ürün")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    if summary.activeProductCount != summary.productCount {
+                                        Text("(\(summary.activeProductCount) aktif)")
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                }
+                                if let errorMsg = summary.lastErrorMessage {
+                                    Text(errorMsg)
+                                        .font(.caption2)
+                                        .foregroundStyle(.orange)
+                                        .lineLimit(1)
+                                }
+                            }
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                        }
+                    }
                 }
 
                 Divider()
@@ -3419,6 +3590,7 @@ private struct StorePageWebView: NSViewRepresentable {
     let notificationsEnabled: Bool
     let emailNotificationsEnabled: Bool
     let adaptiveMonitoringEnabled: Bool
+    let autoOpenOnRestockEnabled: Bool
     let onCheckComplete: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -3431,6 +3603,7 @@ private struct StorePageWebView: NSViewRepresentable {
             notificationsEnabled: notificationsEnabled,
             emailNotificationsEnabled: emailNotificationsEnabled,
             adaptiveMonitoringEnabled: adaptiveMonitoringEnabled,
+            autoOpenOnRestockEnabled: autoOpenOnRestockEnabled,
             onCheckComplete: onCheckComplete
         )
     }
@@ -3449,7 +3622,8 @@ private struct StorePageWebView: NSViewRepresentable {
             webView: webView,
             notificationsEnabled: notificationsEnabled,
             emailNotificationsEnabled: emailNotificationsEnabled,
-            adaptiveMonitoringEnabled: adaptiveMonitoringEnabled
+            adaptiveMonitoringEnabled: adaptiveMonitoringEnabled,
+            autoOpenOnRestockEnabled: autoOpenOnRestockEnabled
         )
     }
 
@@ -3462,6 +3636,7 @@ private struct StorePageWebView: NSViewRepresentable {
         private var notificationsEnabled: Bool
         private var emailNotificationsEnabled: Bool
         private var adaptiveMonitoringEnabled: Bool
+        private var autoOpenOnRestockEnabled: Bool
         private let onCheckComplete: () -> Void
         private var loadedProductID: UUID
         private var pageIsReady = false
@@ -3485,6 +3660,7 @@ private struct StorePageWebView: NSViewRepresentable {
             notificationsEnabled: Bool,
             emailNotificationsEnabled: Bool,
             adaptiveMonitoringEnabled: Bool,
+            autoOpenOnRestockEnabled: Bool,
             onCheckComplete: @escaping () -> Void
         ) {
             self.product = product
@@ -3495,6 +3671,7 @@ private struct StorePageWebView: NSViewRepresentable {
             self.notificationsEnabled = notificationsEnabled
             self.emailNotificationsEnabled = emailNotificationsEnabled
             self.adaptiveMonitoringEnabled = adaptiveMonitoringEnabled
+            self.autoOpenOnRestockEnabled = autoOpenOnRestockEnabled
             self.onCheckComplete = onCheckComplete
             self.loadedProductID = product.wrappedValue.id
         }
@@ -3505,12 +3682,14 @@ private struct StorePageWebView: NSViewRepresentable {
             webView: WKWebView,
             notificationsEnabled: Bool,
             emailNotificationsEnabled: Bool,
-            adaptiveMonitoringEnabled: Bool
+            adaptiveMonitoringEnabled: Bool,
+            autoOpenOnRestockEnabled: Bool
         ) {
             self.product = product
             self.notificationsEnabled = notificationsEnabled
             self.emailNotificationsEnabled = emailNotificationsEnabled
             self.adaptiveMonitoringEnabled = adaptiveMonitoringEnabled
+            self.autoOpenOnRestockEnabled = autoOpenOnRestockEnabled
             let currentProduct = product.wrappedValue
             if currentProduct.id != loadedProductID {
                 loadedProductID = currentProduct.id
@@ -3748,42 +3927,75 @@ private struct StorePageWebView: NSViewRepresentable {
 
                     if case .restocked = transition {
                         let current = self.product.wrappedValue
-                        if self.notificationsEnabled && current.isMacOSNotificationEnabled {
-                            StockNotificationManager.shared.sendRestockNotification(
-                                productID: current.id,
-                                productName: current.productName,
-                                variantTitle: current.variantTitle,
-                                productURL: current.productURL
-                            )
+                        if current.notificationProfile.shouldNotifyOnRestock {
+                            if self.notificationsEnabled && current.isMacOSNotificationEnabled {
+                                StockNotificationManager.shared.sendRestockNotification(
+                                    productID: current.id,
+                                    productName: current.productName,
+                                    variantTitle: current.variantTitle,
+                                    productURL: current.productURL
+                                )
+                            } else {
+                                let reason = !self.notificationsEnabled
+                                    ? "macOS bildirimleri ayarlarda kapalı"
+                                    : "Bu ürün için macOS bildirimi kapalı"
+                                NotificationAuditManager.shared.record(
+                                    productID: current.id,
+                                    productName: current.productName,
+                                    variantTitle: current.variantTitle,
+                                    channel: .macOS,
+                                    status: .skipped,
+                                    message: reason
+                                )
+                            }
+                            if self.emailNotificationsEnabled && current.isEmailNotificationEnabled {
+                                EmailNotificationService.shared.sendRestockNotification(
+                                    for: current
+                                )
+                            } else {
+                                let reason = !self.emailNotificationsEnabled
+                                    ? "E-posta bildirimleri ayarlarda kapalı"
+                                    : "Bu ürün için e-posta bildirimi kapalı"
+                                NotificationAuditManager.shared.record(
+                                    productID: current.id,
+                                    productName: current.productName,
+                                    variantTitle: current.variantTitle,
+                                    channel: .email,
+                                    status: .skipped,
+                                    message: reason
+                                )
+                            }
                         } else {
-                            let reason = !self.notificationsEnabled
-                                ? "macOS bildirimleri ayarlarda kapalı"
-                                : "Bu ürün için macOS bildirimi kapalı"
                             NotificationAuditManager.shared.record(
                                 productID: current.id,
                                 productName: current.productName,
                                 variantTitle: current.variantTitle,
                                 channel: .macOS,
                                 status: .skipped,
-                                message: reason
+                                message: "Bildirim profili sessiz olarak ayarlanmış"
                             )
                         }
-                        if self.emailNotificationsEnabled && current.isEmailNotificationEnabled {
-                            EmailNotificationService.shared.sendRestockNotification(
-                                for: current
-                            )
-                        } else {
-                            let reason = !self.emailNotificationsEnabled
-                                ? "E-posta bildirimleri ayarlarda kapalı"
-                                : "Bu ürün için e-posta bildirimi kapalı"
-                            NotificationAuditManager.shared.record(
-                                productID: current.id,
-                                productName: current.productName,
-                                variantTitle: current.variantTitle,
-                                channel: .email,
-                                status: .skipped,
-                                message: reason
-                            )
+
+                        AutoOpenManager.shared.handleRestock(
+                            for: current,
+                            globalEnabled: self.autoOpenOnRestockEnabled
+                        )
+                    } else if case .wentOutOfStock = transition {
+                        let current = self.product.wrappedValue
+                        if current.notificationProfile.shouldNotifyOnDepletion {
+                            if self.notificationsEnabled && current.isMacOSNotificationEnabled {
+                                StockNotificationManager.shared.sendDepletionNotification(
+                                    productID: current.id,
+                                    productName: current.productName,
+                                    variantTitle: current.variantTitle,
+                                    productURL: current.productURL
+                                )
+                            }
+                            if self.emailNotificationsEnabled && current.isEmailNotificationEnabled {
+                                EmailNotificationService.shared.sendDepletionNotification(
+                                    for: current
+                                )
+                            }
                         }
                     }
                     self.finishCheck()
@@ -3997,23 +4209,80 @@ private struct StorePageWebView: NSViewRepresentable {
 }
 
 @MainActor
+final class AutoOpenManager {
+    static let shared = AutoOpenManager()
+
+    private var lastOpenedTimes: [UUID: Date] = [:]
+    private var lastGlobalOpenDate: Date?
+    private let minimumGlobalInterval: TimeInterval = 2.0
+    private let minimumProductInterval: TimeInterval = 60.0
+
+    private init() {}
+
+    func handleRestock(for product: TrackedProduct, globalEnabled: Bool) {
+        let shouldOpen: Bool
+        if let override = product.autoOpenOnRestock {
+            shouldOpen = override
+        } else {
+            shouldOpen = globalEnabled
+        }
+
+        guard shouldOpen else { return }
+
+        let url = product.productURL
+        guard let scheme = url.scheme?.lowercased(), (scheme == "http" || scheme == "https") else {
+            return
+        }
+
+        let now = Date()
+        if let lastGlobal = lastGlobalOpenDate, now.timeIntervalSince(lastGlobal) < minimumGlobalInterval {
+            return
+        }
+
+        if let lastProductTime = lastOpenedTimes[product.id], now.timeIntervalSince(lastProductTime) < minimumProductInterval {
+            return
+        }
+
+        lastGlobalOpenDate = now
+        lastOpenedTimes[product.id] = now
+        NSWorkspace.shared.open(url)
+    }
+
+    func resetForTesting() {
+        lastOpenedTimes.removeAll()
+        lastGlobalOpenDate = nil
+    }
+}
+
+@MainActor
 private final class StockNotificationManager {
     static let shared = StockNotificationManager()
 
-    private struct RestockNotice {
+    private struct ProductNotice {
         let productID: UUID
         let productName: String
         let variantTitle: String
         let productURL: URL
+        let isRestock: Bool
     }
 
-    private var pendingNotices: [RestockNotice] = []
+    private var pendingNotices: [ProductNotice] = []
     private var isProcessingNotices = false
 
     private init() {}
 
     func sendRestockNotification(productID: UUID, productName: String, variantTitle: String, productURL: URL) {
-        pendingNotices.append(RestockNotice(productID: productID, productName: productName, variantTitle: variantTitle, productURL: productURL))
+        pendingNotices.append(ProductNotice(productID: productID, productName: productName, variantTitle: variantTitle, productURL: productURL, isRestock: true))
+        guard !isProcessingNotices else { return }
+
+        isProcessingNotices = true
+        Task { @MainActor in
+            await processPendingNotices()
+        }
+    }
+
+    func sendDepletionNotification(productID: UUID, productName: String, variantTitle: String, productURL: URL) {
+        pendingNotices.append(ProductNotice(productID: productID, productName: productName, variantTitle: variantTitle, productURL: productURL, isRestock: false))
         guard !isProcessingNotices else { return }
 
         isProcessingNotices = true
@@ -4043,8 +4312,13 @@ private final class StockNotificationManager {
 
                 for notice in notices {
                     let content = UNMutableNotificationContent()
-                    content.title = "Stok geldi! 🎉"
-                    content.body = "\(notice.productName) — \(notice.variantTitle) artık stokta."
+                    if notice.isRestock {
+                        content.title = "Stok geldi! 🎉"
+                        content.body = "\(notice.productName) — \(notice.variantTitle) artık stokta."
+                    } else {
+                        content.title = "Stok tükendi"
+                        content.body = "\(notice.productName) — \(notice.variantTitle) tükendi."
+                    }
                     content.sound = .default
                     content.userInfo = [
                         "productID": notice.productID.uuidString,
@@ -4102,6 +4376,13 @@ private struct SettingsView: View {
     @AppStorage("adaptiveMonitoringEnabled") private var adaptiveMonitoringEnabled = false
     @AppStorage("stockNotificationsEnabled") private var stockNotificationsEnabled = true
     @AppStorage("emailNotificationsEnabled") private var emailNotificationsEnabled = false
+    @AppStorage("monitoringScheduleEnabled") private var monitoringScheduleEnabled = false
+    @AppStorage("monitoringScheduleStartHour") private var monitoringScheduleStartHour = 9
+    @AppStorage("monitoringScheduleStartMinute") private var monitoringScheduleStartMinute = 0
+    @AppStorage("monitoringScheduleEndHour") private var monitoringScheduleEndHour = 23
+    @AppStorage("monitoringScheduleEndMinute") private var monitoringScheduleEndMinute = 0
+    @AppStorage("monitoringScheduleWeekdays") private var monitoringScheduleWeekdays = "1,2,3,4,5,6,7"
+    @AppStorage("autoOpenOnRestockEnabled") private var autoOpenOnRestockEnabled = false
     @AppStorage("launchAtLoginEnabled") private var launchAtLoginEnabled = false
     @AppStorage("monitoringPowerMode") private var monitoringPowerMode: MonitoringPowerMode = .allowDisplaySleepKeepMacAwake
     @State private var launchAtLoginMessage: String?
@@ -4131,7 +4412,41 @@ private struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Bildirimler") {
+            Section("Zamanlanmış İzleme") {
+                Toggle("Zamanlanmış izlemeyi etkinleştir", isOn: $monitoringScheduleEnabled)
+
+                if monitoringScheduleEnabled {
+                    HStack {
+                        Text("Başlangıç saati:")
+                        Spacer()
+                        Picker("Saat", selection: $monitoringScheduleStartHour) {
+                            ForEach(0..<24, id: \.self) { h in
+                                Text(String(format: "%02d:00", h)).tag(h)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 90)
+                    }
+
+                    HStack {
+                        Text("Bitiş saati:")
+                        Spacer()
+                        Picker("Saat", selection: $monitoringScheduleEndHour) {
+                            ForEach(0..<24, id: \.self) { h in
+                                Text(String(format: "%02d:00", h)).tag(h)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 90)
+                    }
+
+                    Text("Otomatik kontroller yalnızca belirlenen saatler arasında çalışır. Manuel kontroller her zaman yapılabilir.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Bildirimler ve Otomasyon") {
                 Toggle("Bildirimler", isOn: $stockNotificationsEnabled)
 
                 Toggle("E-posta bildirimi", isOn: $emailNotificationsEnabled)
@@ -4141,6 +4456,12 @@ private struct SettingsView: View {
                     .foregroundStyle(.secondary)
 
                 Text("E-posta gönderimi, Mac'inizde yapılandırılmış Mail hesabı üzerinden gerçekleştirilir.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Stok geldiğinde tarayıcıda otomatik aç", isOn: $autoOpenOnRestockEnabled)
+
+                Text("Ürün stoğa girdiğinde ürün sayfasını varsayılan web tarayıcınızda otomatik olarak açar.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -4165,6 +4486,24 @@ private struct SettingsView: View {
                             .font(.caption)
                             .foregroundStyle(testEmailStatusIsError ? .red : .secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+            Section("Mağaza Durumu") {
+                let savedProducts = TrackedProductStore.load()
+                let summaries = ProviderHealthSummary.allSummaries(for: savedProducts, isNetworkAvailable: NetworkReachabilityMonitor.shared.canProceedWithChecks)
+                ForEach(summaries) { summary in
+                    HStack {
+                        Image(systemName: summary.health.symbol)
+                            .foregroundStyle(summary.health.color)
+                        Text(summary.provider.displayName)
+                        Spacer()
+                        Text("\(summary.productCount) ürün")
+                            .foregroundStyle(.secondary)
+                        Text("(\(summary.health.title))")
+                            .foregroundStyle(summary.health.color)
+                            .font(.caption)
                     }
                 }
             }
@@ -4296,6 +4635,13 @@ private struct SettingsView: View {
         adaptiveMonitoringEnabled = false
         stockNotificationsEnabled = true
         emailNotificationsEnabled = false
+        monitoringScheduleEnabled = false
+        monitoringScheduleStartHour = 9
+        monitoringScheduleStartMinute = 0
+        monitoringScheduleEndHour = 23
+        monitoringScheduleEndMinute = 0
+        monitoringScheduleWeekdays = "1,2,3,4,5,6,7"
+        autoOpenOnRestockEnabled = false
         monitoringPowerMode = .default
         testEmailStatusMessage = nil
         testEmailStatusIsError = false

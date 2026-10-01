@@ -46,6 +46,54 @@ enum StoreProvider: String, Codable, Sendable, CaseIterable {
     }
 }
 
+enum NotificationProfile: String, Codable, CaseIterable, Sendable {
+    case standard
+    case onlyRestock
+    case allChanges
+    case silent
+
+    var title: String {
+        switch self {
+        case .standard: "Standart (Yalnızca Stok Geldiğinde)"
+        case .onlyRestock: "Yalnızca Stok Geldiğinde"
+        case .allChanges: "Tüm Değişiklikler (Giriş & Çıkış)"
+        case .silent: "Sessiz (Bildirim Yok)"
+        }
+    }
+
+    var shortTitle: String {
+        switch self {
+        case .standard: "Standart"
+        case .onlyRestock: "Yalnızca Stok"
+        case .allChanges: "Tüm Değişimler"
+        case .silent: "Sessiz"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .standard: "bell"
+        case .onlyRestock: "bell.badge"
+        case .allChanges: "bell.badge.fill"
+        case .silent: "bell.slash"
+        }
+    }
+
+    var shouldNotifyOnRestock: Bool {
+        switch self {
+        case .standard, .onlyRestock, .allChanges: true
+        case .silent: false
+        }
+    }
+
+    var shouldNotifyOnDepletion: Bool {
+        switch self {
+        case .allChanges: true
+        case .standard, .onlyRestock, .silent: false
+        }
+    }
+}
+
 struct ZaraVariantMetadata: Codable, Hashable, Sendable {
     var productGroupID: String
     var marketPath: String
@@ -188,6 +236,132 @@ struct ProviderDiagnostic: Codable, Hashable, Sendable {
     }
 }
 
+enum ProviderHealth: String, Codable, Sendable, CaseIterable {
+    case healthy
+    case warning
+    case unknown
+    case networkUnavailable
+
+    var title: String {
+        switch self {
+        case .healthy: "Sorunsuz"
+        case .warning: "Uyarı"
+        case .unknown: "Bilinmiyor"
+        case .networkUnavailable: "Ağ Yok"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .healthy: "checkmark.circle.fill"
+        case .warning: "exclamationmark.triangle.fill"
+        case .unknown: "questionmark.circle"
+        case .networkUnavailable: "wifi.slash"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .healthy: .green
+        case .warning: .orange
+        case .unknown: .secondary
+        case .networkUnavailable: .red
+        }
+    }
+}
+
+struct ProviderHealthSummary: Identifiable, Sendable {
+    let provider: StoreProvider
+    let health: ProviderHealth
+    let productCount: Int
+    let activeProductCount: Int
+    let lastSuccessfulCheckDate: Date?
+    let lastErrorMessage: String?
+
+    var id: StoreProvider { provider }
+
+    static func calculate(
+        for provider: StoreProvider,
+        products: [TrackedProduct],
+        isNetworkAvailable: Bool
+    ) -> ProviderHealthSummary {
+        let providerProducts = products.filter { $0.provider == provider }
+        let count = providerProducts.count
+        let activeProducts = providerProducts.filter { !$0.isPaused }
+        let activeCount = activeProducts.count
+
+        guard isNetworkAvailable else {
+            return ProviderHealthSummary(
+                provider: provider,
+                health: .networkUnavailable,
+                productCount: count,
+                activeProductCount: activeCount,
+                lastSuccessfulCheckDate: nil,
+                lastErrorMessage: "Ağ bağlantısı yok"
+            )
+        }
+
+        if providerProducts.isEmpty {
+            return ProviderHealthSummary(
+                provider: provider,
+                health: .unknown,
+                productCount: 0,
+                activeProductCount: 0,
+                lastSuccessfulCheckDate: nil,
+                lastErrorMessage: nil
+            )
+        }
+
+        let lastSuccess = providerProducts
+            .compactMap { $0.latestDiagnostic?.lastSuccessfulCheckDate ?? ($0.lastCheckError == nil ? $0.lastChecked : nil) }
+            .max()
+
+        let recentError = activeProducts.first(where: { $0.lastCheckError != nil })?.lastCheckError
+            ?? activeProducts.compactMap { p -> String? in
+                if let diag = p.latestDiagnostic, diag.outcome == .providerFailure || diag.outcome == .timeout || diag.outcome == .pageLoadFailure {
+                    return diag.userMessage
+                }
+                return nil
+            }.first
+
+        let hasError = activeProducts.contains { p in
+            p.status == .error || p.lastCheckError != nil ||
+            p.latestDiagnostic?.outcome == .providerFailure ||
+            p.latestDiagnostic?.outcome == .timeout ||
+            p.latestDiagnostic?.outcome == .pageLoadFailure
+        }
+
+        let hasSuccess = providerProducts.contains { p in
+            p.lastChecked != nil && p.lastCheckError == nil
+        }
+
+        let health: ProviderHealth
+        if hasError {
+            health = .warning
+        } else if hasSuccess {
+            health = .healthy
+        } else {
+            health = .unknown
+        }
+
+        return ProviderHealthSummary(
+            provider: provider,
+            health: health,
+            productCount: count,
+            activeProductCount: activeCount,
+            lastSuccessfulCheckDate: lastSuccess,
+            lastErrorMessage: recentError
+        )
+    }
+
+    static func allSummaries(
+        for products: [TrackedProduct],
+        isNetworkAvailable: Bool
+    ) -> [ProviderHealthSummary] {
+        StoreProvider.allCases.map { calculate(for: $0, products: products, isNetworkAvailable: isNetworkAvailable) }
+    }
+}
+
 enum TechnicalDetailSanitizer {
     static func sanitize(_ raw: String) -> String {
         var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -275,6 +449,8 @@ struct TrackedProduct: Identifiable {
     var note: String? = nil
     var isMacOSNotificationEnabled: Bool = true
     var isEmailNotificationEnabled: Bool = true
+    var notificationProfile: NotificationProfile = .standard
+    var autoOpenOnRestock: Bool? = nil
 
     var variantID: String { selectedVariant.id }
     var variantTitle: String { selectedVariant.displayTitle ?? "Tek seçenek" }
@@ -423,6 +599,8 @@ private struct SavedTrackedProduct: Codable {
     let note: String?
     let isMacOSNotificationEnabled: Bool
     let isEmailNotificationEnabled: Bool
+    let notificationProfile: NotificationProfile
+    let autoOpenOnRestock: Bool?
 
     init(_ product: TrackedProduct) {
         id = product.id
@@ -448,6 +626,8 @@ private struct SavedTrackedProduct: Codable {
         note = product.note
         isMacOSNotificationEnabled = product.isMacOSNotificationEnabled
         isEmailNotificationEnabled = product.isEmailNotificationEnabled
+        notificationProfile = product.notificationProfile
+        autoOpenOnRestock = product.autoOpenOnRestock
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -457,6 +637,7 @@ private struct SavedTrackedProduct: Codable {
         case group, tags
         case consecutiveUnchangedChecks, consecutiveFailureChecks
         case isPriority, note, isMacOSNotificationEnabled, isEmailNotificationEnabled
+        case notificationProfile, autoOpenOnRestock
         // Fields written by trackedProducts.v1 before SelectedVariant was introduced.
         case variantID, variantTitle, lastKnownAvailable, status, options
     }
@@ -500,6 +681,8 @@ private struct SavedTrackedProduct: Codable {
         note = try values.decodeIfPresent(String.self, forKey: .note)
         isMacOSNotificationEnabled = try values.decodeIfPresent(Bool.self, forKey: .isMacOSNotificationEnabled) ?? true
         isEmailNotificationEnabled = try values.decodeIfPresent(Bool.self, forKey: .isEmailNotificationEnabled) ?? true
+        notificationProfile = try values.decodeIfPresent(NotificationProfile.self, forKey: .notificationProfile) ?? .standard
+        autoOpenOnRestock = try values.decodeIfPresent(Bool.self, forKey: .autoOpenOnRestock)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -541,6 +724,10 @@ private struct SavedTrackedProduct: Codable {
         if !isEmailNotificationEnabled {
             try values.encode(isEmailNotificationEnabled, forKey: .isEmailNotificationEnabled)
         }
+        if notificationProfile != .standard {
+            try values.encode(notificationProfile, forKey: .notificationProfile)
+        }
+        try values.encodeIfPresent(autoOpenOnRestock, forKey: .autoOpenOnRestock)
     }
 }
 
@@ -602,7 +789,9 @@ private extension SavedTrackedProduct {
             isPriority: isPriority,
             note: note,
             isMacOSNotificationEnabled: isMacOSNotificationEnabled,
-            isEmailNotificationEnabled: isEmailNotificationEnabled
+            isEmailNotificationEnabled: isEmailNotificationEnabled,
+            notificationProfile: notificationProfile,
+            autoOpenOnRestock: autoOpenOnRestock
         )
     }
 }
@@ -692,6 +881,96 @@ struct AdaptiveMonitoringPolicy: Sendable {
             return "Ürün \(consecutiveUnchangedChecks) kontroldür stokta olmadığı için kontrol sıklığı akıllı olarak azaltıldı (\(effectiveMinutes) dk)."
         }
         return "Akıllı kontrol aralığı etkin (\(effectiveMinutes) dk)."
+    }
+}
+
+struct MonitoringSchedule: Codable, Hashable, Sendable {
+    var isEnabled: Bool
+    var startHour: Int
+    var startMinute: Int
+    var endHour: Int
+    var endMinute: Int
+    var allowedWeekdays: Set<Int> // 1 = Sunday, 2 = Monday, ... 7 = Saturday
+
+    init(
+        isEnabled: Bool = false,
+        startHour: Int = 9,
+        startMinute: Int = 0,
+        endHour: Int = 23,
+        endMinute: Int = 0,
+        allowedWeekdays: Set<Int> = Set(1...7)
+    ) {
+        self.isEnabled = isEnabled
+        self.startHour = max(0, min(23, startHour))
+        self.startMinute = max(0, min(59, startMinute))
+        self.endHour = max(0, min(23, endHour))
+        self.endMinute = max(0, min(59, endMinute))
+        self.allowedWeekdays = allowedWeekdays.isEmpty ? Set(1...7) : allowedWeekdays
+    }
+
+    var isOvernight: Bool {
+        let startMinutes = startHour * 60 + startMinute
+        let endMinutes = endHour * 60 + endMinute
+        return startMinutes > endMinutes
+    }
+
+    func isActive(at date: Date = .now, calendar: Calendar = .current) -> Bool {
+        guard isEnabled else { return true }
+
+        let weekday = calendar.component(.weekday, from: date)
+        let hour = calendar.component(.hour, from: date)
+        let minute = calendar.component(.minute, from: date)
+        let currentMinutes = hour * 60 + minute
+
+        let startMinutes = startHour * 60 + startMinute
+        let endMinutes = endHour * 60 + endMinute
+
+        if startMinutes < endMinutes {
+            // Same-day window
+            guard allowedWeekdays.contains(weekday) else { return false }
+            return currentMinutes >= startMinutes && currentMinutes < endMinutes
+        } else if startMinutes > endMinutes {
+            // Overnight window
+            if currentMinutes >= startMinutes {
+                return allowedWeekdays.contains(weekday)
+            } else if currentMinutes < endMinutes {
+                let yesterday = calendar.date(byAdding: .day, value: -1, to: date) ?? date
+                let yesterdayWeekday = calendar.component(.weekday, from: yesterday)
+                return allowedWeekdays.contains(yesterdayWeekday)
+            } else {
+                return false
+            }
+        } else {
+            // All-day window
+            return allowedWeekdays.contains(weekday)
+        }
+    }
+
+    func nextStartDate(after date: Date = .now, calendar: Calendar = .current) -> Date? {
+        guard isEnabled else { return nil }
+
+        for dayOffset in 0...8 {
+            guard let candidateDay = calendar.date(byAdding: .day, value: dayOffset, to: date) else { continue }
+            var components = calendar.dateComponents([.year, .month, .day], from: candidateDay)
+            components.hour = startHour
+            components.minute = startMinute
+            components.second = 0
+            guard let candidateDate = calendar.date(from: components) else { continue }
+
+            if candidateDate > date {
+                let candidateWeekday = calendar.component(.weekday, from: candidateDate)
+                if allowedWeekdays.contains(candidateWeekday) {
+                    return candidateDate
+                }
+            }
+        }
+        return nil
+    }
+
+    var formattedTimeRange: String {
+        let startStr = String(format: "%02d:%02d", startHour, startMinute)
+        let endStr = String(format: "%02d:%02d", endHour, endMinute)
+        return "\(startStr) – \(endStr)"
     }
 }
 

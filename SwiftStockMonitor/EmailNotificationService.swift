@@ -96,6 +96,53 @@ final class EmailNotificationService: ObservableObject {
         }
     }
 
+    func sendDepletionNotification(for product: TrackedProduct) {
+        let store: String
+        switch product.provider {
+        case .zara: store = "Zara Türkiye"
+        case .bershka: store = "Bershka Türkiye"
+        case .pullAndBear: store = "Pull&Bear Türkiye"
+        case .shopify: store = product.productURL.host() ?? "Shopify Mağazası"
+        }
+
+        let timeFormatter = DateFormatter()
+        timeFormatter.locale = Locale(identifier: "tr_TR")
+        timeFormatter.dateStyle = .medium
+        timeFormatter.timeStyle = .short
+        let timeString = timeFormatter.string(from: Date())
+
+        var bodyLines = [
+            "StockPing bir ürünün stoğunun tükendiğini tespit etti.",
+            "",
+            "Ürün: \(product.productName)",
+            "Mağaza: \(store)"
+        ]
+        if !product.variantTitle.isEmpty && product.variantTitle != "Default Title" {
+            bodyLines.append("Varyant: \(product.variantTitle)")
+        }
+        bodyLines.append("Kontrol zamanı: \(timeString)")
+        bodyLines.append("")
+        bodyLines.append("Ürün bağlantısı:")
+        bodyLines.append(product.productURL.absoluteString)
+
+        let subject = "StockPing — Ürün Stoğu Tükendi"
+        let content = bodyLines.joined(separator: "\n")
+
+        pendingEmails.append(PendingEmail(
+            productID: product.id,
+            productName: product.productName,
+            variantTitle: product.variantTitle,
+            subject: subject,
+            content: content
+        ))
+        guard !isProcessingQueue else { return }
+
+        isProcessingQueue = true
+        Task { @MainActor in
+            await processPendingEmails()
+        }
+    }
+
     func sendTestEmail() async throws -> String {
         guard !isSendingTestEmail else {
             throw EmailNotificationError.unexpected("Halen devam eden bir test e-postası gönderimi var.")
