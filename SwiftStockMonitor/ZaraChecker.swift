@@ -105,7 +105,7 @@ enum ZaraChecker {
         return StoreProductAnalysis(provider: .zara, productName: productName, variants: candidates)
     }
 
-    static func check(in webView: WKWebView, product: TrackedProduct) async throws -> Bool {
+    static func checkWithVariants(in webView: WKWebView, product: TrackedProduct) async throws -> StoreCheckOutcome {
         guard let metadata = product.zaraMetadata,
               !metadata.availabilitySKU.isEmpty,
               !metadata.colorProductID.isEmpty else { throw ZaraCheckerError.missingVariantSKU }
@@ -156,11 +156,48 @@ enum ZaraChecker {
         guard let selected = sizes.first(where: { stringValue($0["sku"]) == metadata.availabilitySKU }),
               let availability = selected["availability"] as? String else { throw ZaraCheckerError.selectedSizeNotReturned }
 
+        let isAvailable: Bool
         switch availability.lowercased() {
-        case "in_stock", "low_on_stock": return true
-        case "out_of_stock", "back_soon", "coming_soon": return false
+        case "in_stock", "low_on_stock": isAvailable = true
+        case "out_of_stock", "back_soon", "coming_soon": isAvailable = false
         default: throw ZaraCheckerError.unknownAvailability(availability)
         }
+
+        var availabilityBySKU: [String: Bool] = [:]
+        for s in sizes {
+            if let sku = stringValue(s["sku"]), let raw = s["availability"] as? String {
+                switch raw.lowercased() {
+                case "in_stock", "low_on_stock": availabilityBySKU[sku] = true
+                case "out_of_stock", "back_soon", "coming_soon": availabilityBySKU[sku] = false
+                default: break
+                }
+            }
+        }
+
+        let now = Date()
+        var updated = product.variantSnapshots ?? []
+        if updated.isEmpty {
+            updated = [VariantStockSnapshot(from: product.selectedVariant, lastChecked: now)]
+        }
+
+        for i in updated.indices {
+            let snap = updated[i]
+            let components = snap.id.split(separator: ":")
+            let sku = components.count > 1 ? String(components[1]) : snap.id
+            if let avail = availabilityBySKU[sku] {
+                updated[i].state = VariantAvailabilityState(availability: avail)
+                updated[i].lastChecked = now
+            } else if snap.id == product.selectedVariant.id {
+                updated[i].state = VariantAvailabilityState(availability: isAvailable)
+                updated[i].lastChecked = now
+            }
+        }
+
+        return StoreCheckOutcome(isAvailable: isAvailable, variants: updated)
+    }
+
+    static func check(in webView: WKWebView, product: TrackedProduct) async throws -> Bool {
+        try await checkWithVariants(in: webView, product: product).isAvailable
     }
 
     private struct PageState {
@@ -215,5 +252,9 @@ extension ZaraChecker: StoreChecker {
 
     static func check(in webView: WKWebView, product: TrackedProduct, activePageURL: URL?) async throws -> Bool {
         try await check(in: webView, product: product)
+    }
+
+    static func checkWithVariants(in webView: WKWebView, product: TrackedProduct, activePageURL: URL?) async throws -> StoreCheckOutcome {
+        try await checkWithVariants(in: webView, product: product)
     }
 }

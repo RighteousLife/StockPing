@@ -1862,6 +1862,7 @@ private enum HistoryDisplayMode: String, CaseIterable, Identifiable {
 
 private struct ProductDetailView: View {
     @State private var isProductInformationExpanded = true
+    @State private var isVariantStockExpanded = true
     @State private var isStockStatisticsExpanded = true
     @State private var isChangeHistoryExpanded = false
     @State private var isDiagnosticExpanded = false
@@ -2274,6 +2275,16 @@ private struct ProductDetailView: View {
 
                     Divider()
 
+                    // Collapsible Section: Varyant Stokları
+                    DisclosureSection(
+                        title: "Varyant Stokları (\(product.variantStockSummary.summaryText))",
+                        isExpanded: $isVariantStockExpanded
+                    ) {
+                        variantStockContent
+                    }
+
+                    Divider()
+
                     // Collapsible Section: Stok İstatistikleri
                     DisclosureSection(
                         title: "Stok İstatistikleri",
@@ -2320,6 +2331,7 @@ private struct ProductDetailView: View {
         }
         .onChange(of: product.id) { _, _ in
             isProductInformationExpanded = true
+            isVariantStockExpanded = true
             isStockStatisticsExpanded = true
             isChangeHistoryExpanded = false
             isDiagnosticExpanded = false
@@ -2435,6 +2447,212 @@ private struct ProductDetailView: View {
         let minutes = seconds / 60
         let remainder = seconds % 60
         return remainder == 0 ? "\(minutes) dk" : "\(minutes) dk \(remainder) sn"
+    }
+
+    @ViewBuilder
+    private var variantStockContent: some View {
+        let snapshots = product.currentVariantSnapshots
+        let summary = product.variantStockSummary
+
+        VStack(alignment: .leading, spacing: 14) {
+            // Summary Header Badge Row
+            HStack(spacing: 12) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(summary.inStockCount > 0 ? Color.green : Color.secondary)
+                        .frame(width: 8, height: 8)
+                    Text("\(summary.inStockCount) / \(summary.totalCount) stokta")
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.primary)
+                }
+
+                if summary.outOfStockCount > 0 {
+                    HStack(spacing: 4) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.red)
+                        Text("\(summary.outOfStockCount) tükendi")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if summary.unknownCount > 0 {
+                    HStack(spacing: 4) {
+                        Image(systemName: "questionmark.circle")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text("\(summary.unknownCount) bilinmiyor")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Spacer()
+
+                if let lastCheck = summary.lastChecked {
+                    Text("Son kontrol: \(TurkishRelativeTime.string(from: lastCheck))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .help(lastCheck.formatted(date: .long, time: .complete))
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+
+            // Adaptive content layout based on option dimensions
+            variantBreakdownView(snapshots: snapshots)
+        }
+    }
+
+    private struct DimensionAnalysis {
+        let primaryDim: String?
+        let primaryValues: [String]
+        let isMultiDimensional: Bool
+    }
+
+    private func analyzeDimensions(snapshots: [VariantStockSnapshot]) -> DimensionAnalysis {
+        var dimensionMap: [String: [String]] = [:]
+        var dimensionOrder: [String] = []
+
+        for s in snapshots {
+            for opt in s.options {
+                let name = opt.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                let val = opt.value.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty, !val.isEmpty else { continue }
+                if dimensionMap[name] == nil {
+                    dimensionMap[name] = []
+                    dimensionOrder.append(name)
+                }
+                if let vals = dimensionMap[name], !vals.contains(val) {
+                    dimensionMap[name]?.append(val)
+                }
+            }
+        }
+
+        let multiValueDims = dimensionOrder.filter { (dimensionMap[$0]?.count ?? 0) > 1 }
+        if multiValueDims.count >= 2 {
+            let primaryDim = multiValueDims[0]
+            let primaryValues = dimensionMap[primaryDim] ?? []
+            return DimensionAnalysis(primaryDim: primaryDim, primaryValues: primaryValues, isMultiDimensional: true)
+        } else {
+            return DimensionAnalysis(primaryDim: nil, primaryValues: [], isMultiDimensional: false)
+        }
+    }
+
+    @ViewBuilder
+    private func variantBreakdownView(snapshots: [VariantStockSnapshot]) -> some View {
+        let analysis = analyzeDimensions(snapshots: snapshots)
+        if analysis.isMultiDimensional, let primaryDim = analysis.primaryDim {
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(analysis.primaryValues, id: \.self) { pVal in
+                    let matchingVariants = snapshots.filter { $0.optionValue(for: primaryDim) == pVal }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("\(primaryDim): \(pVal)")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+
+                        TagFlowLayout(spacing: 6) {
+                            ForEach(matchingVariants) { variant in
+                                variantPill(variant: variant, primaryDimToOmit: primaryDim)
+                            }
+                        }
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.secondary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(snapshots) { variant in
+                    variantRow(variant: variant)
+                }
+            }
+        }
+    }
+
+    private func variantPill(variant: VariantStockSnapshot, primaryDimToOmit: String?) -> some View {
+        let isTracked = (variant.id == product.selectedVariant.id)
+        let displayLabel: String = {
+            if let primaryDimToOmit {
+                let remaining = variant.options.filter { $0.name.caseInsensitiveCompare(primaryDimToOmit) != .orderedSame }
+                if !remaining.isEmpty {
+                    return remaining.map(\.value).joined(separator: " · ")
+                }
+            }
+            return variant.displayTitle
+        }()
+
+        return HStack(spacing: 6) {
+            Image(systemName: variant.state.symbol)
+                .font(.caption2)
+                .foregroundStyle(variant.state.color)
+
+            Text(displayLabel)
+                .font(.caption.weight(isTracked ? .semibold : .regular))
+                .foregroundStyle(.primary)
+
+            Text(variant.state.title)
+                .font(.caption2)
+                .foregroundStyle(variant.state.color)
+
+            if isTracked {
+                Text("Takip Edilen")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 3))
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            isTracked ? Color.accentColor.opacity(0.12) : Color.secondary.opacity(0.08),
+            in: RoundedRectangle(cornerRadius: 5)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 5)
+                .stroke(isTracked ? Color.accentColor.opacity(0.4) : Color.clear, lineWidth: 1)
+        )
+    }
+
+    private func variantRow(variant: VariantStockSnapshot) -> some View {
+        let isTracked = (variant.id == product.selectedVariant.id)
+
+        return HStack(spacing: 8) {
+            Text(variant.displayTitle)
+                .font(.callout.weight(isTracked ? .medium : .regular))
+                .foregroundStyle(.primary)
+
+            if isTracked {
+                Text("Takip Edilen")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
+            }
+
+            Spacer()
+
+            HStack(spacing: 4) {
+                Image(systemName: variant.state.symbol)
+                    .font(.caption)
+                    .foregroundStyle(variant.state.color)
+                Text(variant.state.title)
+                    .font(.callout)
+                    .foregroundStyle(variant.state.color)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            isTracked ? Color.accentColor.opacity(0.06) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 6)
+        )
     }
 
     @ViewBuilder
@@ -3861,7 +4079,8 @@ private struct StorePageWebView: NSViewRepresentable {
 
             providerCheckTask = Task { [self] in
                 do {
-                    let available = try await StoreCheckerRouter.check(in: webView, product: product, activePageURL: webView.url)
+                    let outcome = try await StoreCheckerRouter.checkWithVariants(in: webView, product: product, activePageURL: webView.url)
+                    let available = outcome.isAvailable
                     guard self.activeProviderCheckRequestID == requestID,
                           self.product.wrappedValue.id == product.id else { return }
                     let wasInError = self.product.wrappedValue.lastCheckError != nil
@@ -3890,6 +4109,7 @@ private struct StorePageWebView: NSViewRepresentable {
                     }
                     self.product.wrappedValue.lastAvailabilityTransition = transition
                     self.product.wrappedValue.selectedVariant.availability = available
+                    self.product.wrappedValue.variantSnapshots = outcome.variants
                     self.product.wrappedValue.lastCheckError = nil
 
                     let now = Date()
@@ -5036,6 +5256,7 @@ private struct AddProductSheet: View {
         let candidatesToAdd = variants.filter { selectedVariantIDs.contains($0.id) }
         guard !candidatesToAdd.isEmpty else { return }
 
+        let snapshots = variants.map { VariantStockSnapshot(from: $0, lastChecked: Date()) }
         let products = candidatesToAdd.map { candidate in
             TrackedProduct(
                 id: UUID(),
@@ -5052,7 +5273,8 @@ private struct AddProductSheet: View {
                 zaraMetadata: candidate.zaraMetadata,
                 bershkaMetadata: candidate.bershkaMetadata,
                 pullAndBearMetadata: candidate.pullAndBearMetadata,
-                events: []
+                events: [],
+                variantSnapshots: snapshots
             )
         }
 

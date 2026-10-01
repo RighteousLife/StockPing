@@ -30,6 +30,133 @@ struct SelectedVariant: Codable, Hashable, Sendable {
     }
 }
 
+enum VariantAvailabilityState: String, Codable, Hashable, Sendable, CaseIterable {
+    case inStock
+    case outOfStock
+    case unknown
+
+    var title: String {
+        switch self {
+        case .inStock: "Stokta"
+        case .outOfStock: "Tükendi"
+        case .unknown: "Bilinmiyor"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .inStock: "checkmark.circle.fill"
+        case .outOfStock: "xmark.circle.fill"
+        case .unknown: "questionmark.circle"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .inStock: .green
+        case .outOfStock: .red
+        case .unknown: .secondary
+        }
+    }
+
+    init(availability: Bool?) {
+        switch availability {
+        case true: self = .inStock
+        case false: self = .outOfStock
+        case nil: self = .unknown
+        }
+    }
+
+    var boolValue: Bool? {
+        switch self {
+        case .inStock: true
+        case .outOfStock: false
+        case .unknown: nil
+        }
+    }
+
+    var isAvailable: Bool? {
+        boolValue
+    }
+}
+
+struct VariantStockSnapshot: Identifiable, Codable, Hashable, Sendable {
+    let id: String
+    var title: String
+    var options: [VariantOption]
+    var state: VariantAvailabilityState
+    var lastChecked: Date?
+
+    var availability: Bool? {
+        state.boolValue
+    }
+
+    var displayTitle: String {
+        let normalized = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !normalized.isEmpty && normalized.caseInsensitiveCompare("Default Title") != .orderedSame {
+            return normalized
+        }
+        if !options.isEmpty {
+            return options.map(\.value).joined(separator: " · ")
+        }
+        return "Tek seçenek"
+    }
+
+    func optionValue(for dimensionName: String) -> String? {
+        options.first(where: { $0.name.caseInsensitiveCompare(dimensionName) == .orderedSame })?.value
+    }
+
+    init(
+        id: String,
+        title: String,
+        options: [VariantOption] = [],
+        state: VariantAvailabilityState = .unknown,
+        lastChecked: Date? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.options = options
+        self.state = state
+        self.lastChecked = lastChecked
+    }
+
+    init(from variant: SelectedVariant, lastChecked: Date? = nil) {
+        self.id = variant.id
+        self.title = variant.title
+        self.options = variant.options
+        self.state = VariantAvailabilityState(availability: variant.availability)
+        self.lastChecked = lastChecked
+    }
+}
+
+struct VariantStockSummary: Hashable, Sendable {
+    let totalCount: Int
+    let inStockCount: Int
+    let outOfStockCount: Int
+    let unknownCount: Int
+    let lastChecked: Date?
+
+    var summaryText: String {
+        "\(inStockCount) / \(totalCount) stokta"
+    }
+
+    static func calculate(for variants: [VariantStockSnapshot]) -> VariantStockSummary {
+        let total = variants.count
+        let inStock = variants.filter { $0.state == .inStock }.count
+        let outOfStock = variants.filter { $0.state == .outOfStock }.count
+        let unknown = variants.filter { $0.state == .unknown }.count
+        let latestCheck = variants.compactMap(\.lastChecked).max()
+
+        return VariantStockSummary(
+            totalCount: total,
+            inStockCount: inStock,
+            outOfStockCount: outOfStock,
+            unknownCount: unknown,
+            lastChecked: latestCheck
+        )
+    }
+}
+
 enum StoreProvider: String, Codable, Sendable, CaseIterable {
     case shopify
     case zara
@@ -451,6 +578,18 @@ struct TrackedProduct: Identifiable {
     var isEmailNotificationEnabled: Bool = true
     var notificationProfile: NotificationProfile = .standard
     var autoOpenOnRestock: Bool? = nil
+    var variantSnapshots: [VariantStockSnapshot]? = nil
+
+    var currentVariantSnapshots: [VariantStockSnapshot] {
+        if let snapshots = variantSnapshots, !snapshots.isEmpty {
+            return snapshots
+        }
+        return [VariantStockSnapshot(from: selectedVariant, lastChecked: lastChecked)]
+    }
+
+    var variantStockSummary: VariantStockSummary {
+        VariantStockSummary.calculate(for: currentVariantSnapshots)
+    }
 
     var variantID: String { selectedVariant.id }
     var variantTitle: String { selectedVariant.displayTitle ?? "Tek seçenek" }
@@ -601,6 +740,7 @@ private struct SavedTrackedProduct: Codable {
     let isEmailNotificationEnabled: Bool
     let notificationProfile: NotificationProfile
     let autoOpenOnRestock: Bool?
+    let variantSnapshots: [VariantStockSnapshot]?
 
     init(_ product: TrackedProduct) {
         id = product.id
@@ -628,6 +768,7 @@ private struct SavedTrackedProduct: Codable {
         isEmailNotificationEnabled = product.isEmailNotificationEnabled
         notificationProfile = product.notificationProfile
         autoOpenOnRestock = product.autoOpenOnRestock
+        variantSnapshots = product.variantSnapshots
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -637,7 +778,7 @@ private struct SavedTrackedProduct: Codable {
         case group, tags
         case consecutiveUnchangedChecks, consecutiveFailureChecks
         case isPriority, note, isMacOSNotificationEnabled, isEmailNotificationEnabled
-        case notificationProfile, autoOpenOnRestock
+        case notificationProfile, autoOpenOnRestock, variantSnapshots
         // Fields written by trackedProducts.v1 before SelectedVariant was introduced.
         case variantID, variantTitle, lastKnownAvailable, status, options
     }
@@ -683,6 +824,7 @@ private struct SavedTrackedProduct: Codable {
         isEmailNotificationEnabled = try values.decodeIfPresent(Bool.self, forKey: .isEmailNotificationEnabled) ?? true
         notificationProfile = try values.decodeIfPresent(NotificationProfile.self, forKey: .notificationProfile) ?? .standard
         autoOpenOnRestock = try values.decodeIfPresent(Bool.self, forKey: .autoOpenOnRestock)
+        variantSnapshots = try values.decodeIfPresent([VariantStockSnapshot].self, forKey: .variantSnapshots)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -728,6 +870,9 @@ private struct SavedTrackedProduct: Codable {
             try values.encode(notificationProfile, forKey: .notificationProfile)
         }
         try values.encodeIfPresent(autoOpenOnRestock, forKey: .autoOpenOnRestock)
+        if let variantSnapshots, !variantSnapshots.isEmpty {
+            try values.encode(Array(variantSnapshots.prefix(50)), forKey: .variantSnapshots)
+        }
     }
 }
 
@@ -791,7 +936,8 @@ private extension SavedTrackedProduct {
             isMacOSNotificationEnabled: isMacOSNotificationEnabled,
             isEmailNotificationEnabled: isEmailNotificationEnabled,
             notificationProfile: notificationProfile,
-            autoOpenOnRestock: autoOpenOnRestock
+            autoOpenOnRestock: autoOpenOnRestock,
+            variantSnapshots: variantSnapshots
         )
     }
 }

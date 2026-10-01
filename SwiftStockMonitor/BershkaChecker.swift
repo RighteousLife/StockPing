@@ -204,13 +204,17 @@ enum BershkaChecker {
     }
 
     static func check(in webView: WKWebView, product: TrackedProduct) async throws -> Bool {
-        let gate = BershkaCheckGate()
+        try await checkWithVariants(in: webView, product: product).isAvailable
+    }
+
+    static func checkWithVariants(in webView: WKWebView, product: TrackedProduct) async throws -> StoreCheckOutcome {
+        let gate = BershkaCheckGate<StoreCheckOutcome>()
         return try await gate.run(timeout: .seconds(Int64(navigationTimeout))) {
-            try await checkPage(in: webView, product: product)
+            try await checkPageWithVariants(in: webView, product: product)
         }
     }
 
-    private static func checkPage(in webView: WKWebView, product: TrackedProduct) async throws -> Bool {
+    private static func checkPageWithVariants(in webView: WKWebView, product: TrackedProduct) async throws -> StoreCheckOutcome {
         guard let metadata = product.bershkaMetadata,
               canHandle(product.productURL),
               productID(in: product.productURL) == metadata.productID,
@@ -246,7 +250,29 @@ enum BershkaChecker {
             if rawStock == "in_stock" { throw BershkaCheckerError.stockDataUnavailable(size.name) }
             throw BershkaCheckerError.unknownStock(rawStock)
         }
-        return available
+
+        let now = Date()
+        var snapshots: [VariantStockSnapshot] = []
+        for c in colors {
+            for s in c.sizes {
+                for t in s.types {
+                    let avail = normalizedAvailability(stock: s.stock, isBuyable: s.isBuyable)
+                    let options = [
+                        VariantOption(name: "Renk", value: c.name),
+                        VariantOption(name: "Beden", value: s.name)
+                    ]
+                    snapshots.append(VariantStockSnapshot(
+                        id: "bershka:\(metadata.productID):\(c.id):\(t.sku)",
+                        title: "\(c.name) / \(s.name)",
+                        options: options,
+                        state: VariantAvailabilityState(availability: avail),
+                        lastChecked: now
+                    ))
+                }
+            }
+        }
+
+        return StoreCheckOutcome(isAvailable: available, variants: snapshots)
     }
 
     nonisolated static func normalizedAvailability(stock: String?, isBuyable: Bool?) -> Bool? {
@@ -468,12 +494,16 @@ extension BershkaChecker: StoreChecker {
     static func check(in webView: WKWebView, product: TrackedProduct, activePageURL: URL?) async throws -> Bool {
         try await check(in: webView, product: product)
     }
+
+    static func checkWithVariants(in webView: WKWebView, product: TrackedProduct, activePageURL: URL?) async throws -> StoreCheckOutcome {
+        try await checkWithVariants(in: webView, product: product)
+    }
 }
 
 @MainActor
-private final class BershkaCheckGate {
+private final class BershkaCheckGate<T: Sendable> {
     private struct ResultBox: @unchecked Sendable {
-        let value: Bool
+        let value: T
     }
 
     private var continuation: CheckedContinuation<ResultBox, Error>?
@@ -482,8 +512,8 @@ private final class BershkaCheckGate {
 
     func run(
         timeout: Duration,
-        operation: @escaping @MainActor () async throws -> Bool
-    ) async throws -> Bool {
+        operation: @escaping @MainActor () async throws -> T
+    ) async throws -> T {
         try Task.checkCancellation()
 
         let result = try await withTaskCancellationHandler {

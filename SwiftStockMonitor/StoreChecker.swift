@@ -53,6 +53,21 @@ struct StoreProductAnalysis: Sendable {
     }
 }
 
+struct StoreCheckOutcome: Sendable {
+    let isAvailable: Bool
+    let variants: [VariantStockSnapshot]
+}
+
+extension VariantStockSnapshot {
+    init(from candidate: StoreVariantCandidate, lastChecked: Date? = nil) {
+        self.id = candidate.id
+        self.title = candidate.variant.title
+        self.options = candidate.variant.options
+        self.state = VariantAvailabilityState(availability: candidate.initialAvailability)
+        self.lastChecked = lastChecked
+    }
+}
+
 @MainActor
 protocol StoreChecker {
     static var provider: StoreProvider { get }
@@ -60,6 +75,28 @@ protocol StoreChecker {
     static func normalizedProductURL(from url: URL) -> URL?
     static func analyze(in webView: WKWebView, productURL: URL, activePageURL: URL?) async throws -> StoreProductAnalysis
     static func check(in webView: WKWebView, product: TrackedProduct, activePageURL: URL?) async throws -> Bool
+    static func checkWithVariants(in webView: WKWebView, product: TrackedProduct, activePageURL: URL?) async throws -> StoreCheckOutcome
+}
+
+extension StoreChecker {
+    static func checkWithVariants(in webView: WKWebView, product: TrackedProduct, activePageURL: URL?) async throws -> StoreCheckOutcome {
+        let available = try await check(in: webView, product: product, activePageURL: activePageURL)
+        var snapshots = product.variantSnapshots ?? []
+        let now = Date()
+        if let idx = snapshots.firstIndex(where: { $0.id == product.selectedVariant.id }) {
+            snapshots[idx].state = VariantAvailabilityState(availability: available)
+            snapshots[idx].lastChecked = now
+        } else {
+            snapshots.append(VariantStockSnapshot(
+                id: product.selectedVariant.id,
+                title: product.selectedVariant.title,
+                options: product.selectedVariant.options,
+                state: VariantAvailabilityState(availability: available),
+                lastChecked: now
+            ))
+        }
+        return StoreCheckOutcome(isAvailable: available, variants: snapshots)
+    }
 }
 
 @MainActor
@@ -86,6 +123,14 @@ enum StoreCheckerRouter {
 
     static func check(in webView: WKWebView, product: TrackedProduct, activePageURL: URL?) async throws -> Bool {
         return try await checker(for: product.provider).check(
+            in: webView,
+            product: product,
+            activePageURL: activePageURL
+        )
+    }
+
+    static func checkWithVariants(in webView: WKWebView, product: TrackedProduct, activePageURL: URL?) async throws -> StoreCheckOutcome {
+        return try await checker(for: product.provider).checkWithVariants(
             in: webView,
             product: product,
             activePageURL: activePageURL
@@ -140,5 +185,23 @@ extension ShopifyChecker: StoreChecker {
             throw ShopifyCheckerError.availabilityUnavailable
         }
         return available
+    }
+
+    static func checkWithVariants(in webView: WKWebView, product: TrackedProduct, activePageURL: URL?) async throws -> StoreCheckOutcome {
+        let remote = try await fetchProduct(in: webView, productURL: product.productURL, activePageURL: activePageURL)
+        guard let available = try variant(withID: product.variantID, in: remote).available else {
+            throw ShopifyCheckerError.availabilityUnavailable
+        }
+        let now = Date()
+        let snapshots = remote.variants.map { v in
+            VariantStockSnapshot(
+                id: v.id,
+                title: v.title,
+                options: v.options,
+                state: VariantAvailabilityState(availability: v.available),
+                lastChecked: now
+            )
+        }
+        return StoreCheckOutcome(isAvailable: available, variants: snapshots)
     }
 }

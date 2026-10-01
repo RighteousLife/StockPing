@@ -103,7 +103,7 @@ enum PullAndBearChecker {
         return StoreProductAnalysis(provider: .pullAndBear, productName: snapshot.productName, variants: candidates)
     }
 
-    static func check(in webView: WKWebView, product: TrackedProduct, activePageURL: URL?) async throws -> Bool {
+    static func checkWithVariants(in webView: WKWebView, product: TrackedProduct, activePageURL: URL?) async throws -> StoreCheckOutcome {
         guard let metadata = product.pullAndBearMetadata,
               canHandle(product.productURL),
               productCode(in: product.productURL) == metadata.productCode,
@@ -140,7 +140,30 @@ enum PullAndBearChecker {
         guard let size = snapshot.sizes.first(where: { ($0["name"] as? String)?.caseInsensitiveCompare(metadata.sizeName) == .orderedSame }) else {
             throw PullAndBearCheckerError.selectedSizeUnavailable
         }
-        return try availability(from: size, sizeName: metadata.sizeName)
+        let isAvailable = try availability(from: size, sizeName: metadata.sizeName)
+
+        let now = Date()
+        let colorName = snapshot.colorName ?? metadata.colorName
+        let colorIdentity = snapshot.colorParameter ?? snapshot.colorReference ?? colorName
+        let colorOptions = [VariantOption(name: "Renk", value: colorName)]
+
+        let snapshots = snapshot.sizes.compactMap { item -> VariantStockSnapshot? in
+            guard let name = item["name"] as? String, !name.isEmpty else { return nil }
+            let avail = try? availability(from: item, sizeName: name)
+            return VariantStockSnapshot(
+                id: "pullandbear:\(metadata.productCode):\(colorIdentity):\(name)",
+                title: "\(colorName) / \(name)",
+                options: colorOptions + [VariantOption(name: "Beden", value: name)],
+                state: VariantAvailabilityState(availability: avail),
+                lastChecked: now
+            )
+        }
+
+        return StoreCheckOutcome(isAvailable: isAvailable, variants: snapshots)
+    }
+
+    static func check(in webView: WKWebView, product: TrackedProduct, activePageURL: URL?) async throws -> Bool {
+        try await checkWithVariants(in: webView, product: product, activePageURL: activePageURL).isAvailable
     }
 
     nonisolated static func normalizePullAndBearStock(
