@@ -252,8 +252,33 @@ struct PullAndBearVariantMetadata: Codable, Hashable, Sendable {
     var colorReference: String?
     var colorName: String
     var sizeName: String
+    var sku: String?
+    var colorID: String?
+    var partnumber: String?
 
     var colorIdentity: String { colorParameter ?? colorReference ?? colorName }
+
+    init(
+        productCode: String,
+        pageProductID: String? = nil,
+        colorParameter: String? = nil,
+        colorReference: String? = nil,
+        colorName: String,
+        sizeName: String,
+        sku: String? = nil,
+        colorID: String? = nil,
+        partnumber: String? = nil
+    ) {
+        self.productCode = productCode
+        self.pageProductID = pageProductID
+        self.colorParameter = colorParameter
+        self.colorReference = colorReference
+        self.colorName = colorName
+        self.sizeName = sizeName
+        self.sku = sku
+        self.colorID = colorID
+        self.partnumber = partnumber
+    }
 }
 
 enum ProductStatus: String, Codable, Sendable {

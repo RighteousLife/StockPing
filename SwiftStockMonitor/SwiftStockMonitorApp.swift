@@ -2573,8 +2573,21 @@ private struct ProductDetailView: View {
         }
     }
 
+    private func isVariantTracked(_ variant: VariantStockSnapshot) -> Bool {
+        if variant.id == product.selectedVariant.id { return true }
+        if product.provider == .pullAndBear,
+           let meta = product.pullAndBearMetadata {
+            if let metaSku = meta.sku, metaSku == variant.id { return true }
+            let sizeMatch = variant.optionValue(for: "Beden")?.caseInsensitiveCompare(meta.sizeName) == .orderedSame
+            let colorMatch = variant.optionValue(for: "Renk")?.caseInsensitiveCompare(meta.colorName) == .orderedSame
+            let hasColorOption = !variant.options.filter { $0.name.caseInsensitiveCompare("Renk") == .orderedSame }.isEmpty
+            return sizeMatch && (colorMatch || !hasColorOption)
+        }
+        return false
+    }
+
     private func variantPill(variant: VariantStockSnapshot, primaryDimToOmit: String?) -> some View {
-        let isTracked = (variant.id == product.selectedVariant.id)
+        let isTracked = isVariantTracked(variant)
         let displayLabel: String = {
             if let primaryDimToOmit {
                 let remaining = variant.options.filter { $0.name.caseInsensitiveCompare(primaryDimToOmit) != .orderedSame }
@@ -2620,7 +2633,7 @@ private struct ProductDetailView: View {
     }
 
     private func variantRow(variant: VariantStockSnapshot) -> some View {
-        let isTracked = (variant.id == product.selectedVariant.id)
+        let isTracked = isVariantTracked(variant)
 
         return HStack(spacing: 8) {
             Text(variant.displayTitle)
@@ -4141,7 +4154,7 @@ private struct StorePageWebView: NSViewRepresentable {
                         networkStatus: netStatus,
                         errorCategory: "Yok",
                         userMessage: userMsg,
-                        technicalDetail: nil,
+                        technicalDetail: outcome.diagnosticDetail,
                         lastSuccessfulCheckDate: now
                     )
 

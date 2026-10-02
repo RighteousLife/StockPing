@@ -15,7 +15,7 @@ enum PullAndBearCheckerError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidURL: "Geçerli bir Pull&Bear Türkiye ürün URL'si girin."
-        case .unsupportedMarket: "Şu anda yalnızca Pull&Bear Türkiye (/tr/) ürünleri destekleniyor."
+        case .unsupportedMarket: "Şuanda yalnızca Pull&Bear Türkiye (/tr/) ürünleri destekleniyor."
         case .pageLoadTimedOut: "Pull&Bear ürün sayfası zamanında hazır olmadı."
         case .productUnavailable: "Pull&Bear ürün bilgisi sayfadan okunamadı."
         case .productCodeMismatch(let expected, let actual): "Pull&Bear ürün kimliği eşleşmedi. Beklenen: \(expected), bulunan: \(actual)."
@@ -25,6 +25,32 @@ enum PullAndBearCheckerError: LocalizedError {
         case .javascriptEvaluationTimedOut: "Pull&Bear sayfası kontrol sırasında zamanında yanıt vermedi."
         }
     }
+}
+
+struct PullAndBearStructuredProduct: Decodable, Sendable {
+    let productID: String
+    let productName: String
+    let reference: String?
+    let displayReference: String?
+    let colors: [PullAndBearStructuredColor]
+}
+
+struct PullAndBearStructuredColor: Decodable, Sendable {
+    let id: String
+    let name: String
+    let isBuyable: Bool?
+    let sizes: [PullAndBearStructuredSize]
+}
+
+struct PullAndBearStructuredSize: Decodable, Sendable {
+    let id: String
+    let name: String
+    let sku: String
+    let partnumber: String?
+    let isBuyable: Bool?
+    let visibilityValue: String?
+    let backSoon: String?
+    let price: String?
 }
 
 @MainActor
@@ -61,8 +87,226 @@ enum PullAndBearChecker {
         return components.url
     }
 
+    nonisolated static func mapStructuredStock(
+        visibilityValue: String?,
+        backSoon: String?,
+        isBuyable: Bool?
+    ) -> Bool? {
+        if isBuyable == false {
+            return false
+        }
+        if backSoon == "1" || backSoon == "true" {
+            return false
+        }
+        guard let vis = visibilityValue?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() else {
+            return nil
+        }
+        switch vis {
+        case "SHOW", "RUNNING_OUT":
+            return true
+        case "SOLD_OUT":
+            return false
+        default:
+            return nil
+        }
+    }
+
+    private static func referenceMatches(expectedCode: String, structuredReference: String?) -> Bool {
+        guard let structuredReference, !structuredReference.isEmpty else { return true }
+        return structuredReference.contains(expectedCode)
+    }
+
+    private static func fetchStructuredProduct(in webView: WKWebView, timeout: TimeInterval = 6.0) async -> PullAndBearStructuredProduct? {
+        let script = #"""
+        const norm = v => (v || '').trim();
+        const resources = performance.getEntriesByType('resource').map(r => r.name);
+        let detailEndpoint = resources.find(u => u.includes('/product/') && u.includes('/detail'));
+        if (!detailEndpoint) {
+            const storeId = (typeof inditex !== 'undefined' && inditex.iStoreId) ? inditex.iStoreId : 25009521;
+            const catalogId = (typeof inditex !== 'undefined' && inditex.iCatalogId) ? inditex.iCatalogId : 20309459;
+            const langId = (typeof inditex !== 'undefined' && inditex.iLangId) ? inditex.iLangId : -43;
+            const prodId = (typeof inditex !== 'undefined' && inditex.iProductId) ? inditex.iProductId : null;
+            if (prodId) {
+                detailEndpoint = `https://www.pullandbear.com/itxrest/2/catalog/store/${storeId}/${catalogId}/category/0/product/${prodId}/detail?languageId=${langId}&appId=1`;
+            }
+        }
+        if (!detailEndpoint) {
+            return JSON.stringify({ error: "no_endpoint" });
+        }
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 6000);
+        try {
+            const resp = await fetch(detailEndpoint, { cache: 'no-store', signal: controller.signal });
+            clearTimeout(timer);
+            if (!resp.ok) {
+                return JSON.stringify({ error: "http_" + resp.status });
+            }
+            const data = await resp.json();
+            const summary = (data.bundleProductSummaries && data.bundleProductSummaries[0]) || data;
+            const detail = summary.detail || {};
+            const colors = (detail.colors || []).map(c => ({
+                id: String(c.id != null ? c.id : ''),
+                name: norm(c.name),
+                isBuyable: Boolean(c.isBuyable),
+                sizes: (c.sizes || []).map(s => ({
+                    id: String(s.id != null ? s.id : ''),
+                    name: norm(s.name),
+                    sku: String(s.sku != null ? s.sku : ''),
+                    partnumber: s.partnumber ? String(s.partnumber) : null,
+                    isBuyable: Boolean(s.isBuyable),
+                    visibilityValue: s.visibilityValue ? String(s.visibilityValue) : null,
+                    backSoon: s.backSoon != null ? String(s.backSoon) : null,
+                    price: s.price != null ? String(s.price) : null
+                }))
+            }));
+            return JSON.stringify({
+                productID: String(data.id || summary.id || ''),
+                productName: norm(summary.name),
+                reference: detail.reference ? String(detail.reference) : null,
+                displayReference: detail.displayReference ? String(detail.displayReference) : null,
+                colors: colors
+            });
+        } catch (err) {
+            clearTimeout(timer);
+            return JSON.stringify({ error: err.name === 'AbortError' ? 'timeout' : err.message });
+        }
+        """#
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let result = try? await webView.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page) as? String,
+               let data = result.data(using: .utf8),
+               !result.contains("\"error\":\"no_endpoint\""),
+               !result.contains("\"error\":") {
+                if let structured = try? JSONDecoder().decode(PullAndBearStructuredProduct.self, from: data) {
+                    return structured
+                }
+            }
+            try? await Task.sleep(nanoseconds: 350_000_000)
+        }
+        return nil
+    }
+
+    private static func parseStructuredOutcome(
+        structured: PullAndBearStructuredProduct,
+        metadata: PullAndBearVariantMetadata
+    ) -> StoreCheckOutcome? {
+        let matchedColor = structured.colors.first(where: { color in
+            if let param = metadata.colorParameter, !param.isEmpty, color.id == param { return true }
+            if let colId = metadata.colorID, !colId.isEmpty, color.id == colId { return true }
+            if let ref = metadata.colorReference, !ref.isEmpty, color.id == ref { return true }
+            return color.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                .caseInsensitiveCompare(metadata.colorName.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
+        }) ?? (structured.colors.count == 1 ? structured.colors.first : nil)
+
+        guard let matchedColor else { return nil }
+
+        let matchedSize = matchedColor.sizes.first(where: { size in
+            if let expectedSKU = metadata.sku, !expectedSKU.isEmpty, size.sku == expectedSKU {
+                return true
+            }
+            return size.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                .caseInsensitiveCompare(metadata.sizeName.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
+        })
+
+        guard let size = matchedSize else { return nil }
+        guard let isAvailable = mapStructuredStock(
+            visibilityValue: size.visibilityValue,
+            backSoon: size.backSoon,
+            isBuyable: size.isBuyable
+        ) else {
+            return nil
+        }
+
+        let now = Date()
+        var snapshots: [VariantStockSnapshot] = []
+        for color in structured.colors {
+            for sz in color.sizes {
+                let avail = mapStructuredStock(
+                    visibilityValue: sz.visibilityValue,
+                    backSoon: sz.backSoon,
+                    isBuyable: sz.isBuyable
+                )
+                let variantID = !sz.sku.isEmpty ? sz.sku : "pullandbear:\(metadata.productCode):\(color.id):\(sz.name)"
+                let title = structured.colors.count > 1 ? "\(color.name) / \(sz.name)" : sz.name
+                let options = [
+                    VariantOption(name: "Renk", value: color.name),
+                    VariantOption(name: "Beden", value: sz.name)
+                ]
+                snapshots.append(VariantStockSnapshot(
+                    id: variantID,
+                    title: title,
+                    options: options,
+                    state: VariantAvailabilityState(availability: avail),
+                    lastChecked: now
+                ))
+            }
+        }
+
+        let diagnosticDetail = "itxrest (sku: \(size.sku), visibility: \(size.visibilityValue ?? "nil"), backSoon: \(size.backSoon ?? "nil"), buyable: \(size.isBuyable.map(String.init) ?? "nil"))"
+        return StoreCheckOutcome(isAvailable: isAvailable, variants: snapshots, diagnosticDetail: diagnosticDetail)
+    }
+
     static func analyze(in webView: WKWebView, productURL: URL, activePageURL: URL?) async throws -> StoreProductAnalysis {
         guard canHandle(productURL), let code = productCode(in: productURL) else { throw PullAndBearCheckerError.invalidURL }
+
+        // Primary: Try structured itxrest API
+        if let structured = await fetchStructuredProduct(in: webView),
+           referenceMatches(expectedCode: code, structuredReference: structured.reference) {
+            let colorParameter = URLComponents(url: productURL, resolvingAgainstBaseURL: false)?.queryItems?
+                .first(where: { $0.name.caseInsensitiveCompare("cS") == .orderedSame })?.value
+
+            let selectedColors: [PullAndBearStructuredColor]
+            if let colorParameter, let matched = structured.colors.first(where: { $0.id == colorParameter }) {
+                selectedColors = [matched]
+            } else {
+                selectedColors = structured.colors
+            }
+
+            var candidates: [StoreVariantCandidate] = []
+            for color in selectedColors {
+                for size in color.sizes {
+                    let avail = mapStructuredStock(
+                        visibilityValue: size.visibilityValue,
+                        backSoon: size.backSoon,
+                        isBuyable: size.isBuyable
+                    )
+                    let sku = !size.sku.isEmpty ? size.sku : nil
+                    let variantID = sku ?? "pullandbear:\(code):\(color.id):\(size.name)"
+                    let metadata = PullAndBearVariantMetadata(
+                        productCode: code,
+                        pageProductID: structured.productID,
+                        colorParameter: color.id,
+                        colorReference: color.id,
+                        colorName: color.name,
+                        sizeName: size.name,
+                        sku: sku,
+                        colorID: color.id,
+                        partnumber: size.partnumber
+                    )
+                    let variant = SelectedVariant(
+                        id: variantID,
+                        title: selectedColors.count > 1 ? "\(color.name) / \(size.name)" : "\(color.name) / \(size.name)",
+                        options: [
+                            VariantOption(name: "Renk", value: color.name),
+                            VariantOption(name: "Beden", value: size.name)
+                        ],
+                        availability: avail
+                    )
+                    candidates.append(StoreVariantCandidate(
+                        variant: variant,
+                        pullAndBearMetadata: metadata,
+                        pullAndBearInitialAvailability: avail
+                    ))
+                }
+            }
+            if !candidates.isEmpty {
+                let name = !structured.productName.isEmpty ? structured.productName : "Pull&Bear Ürün"
+                return StoreProductAnalysis(provider: .pullAndBear, productName: name, variants: candidates)
+            }
+        }
+
+        // Fallback: DOM / Shadow DOM parser
         let snapshot = try await waitForProduct(in: webView, expectedCode: code, sourceURL: productURL)
         if let pageCode = snapshot.productCode, pageCode != code {
             throw PullAndBearCheckerError.productCodeMismatch(expected: code, actual: pageCode)
@@ -86,7 +330,6 @@ enum PullAndBearChecker {
                 colorName: colorName,
                 sizeName: name
             )
-            // This stable local key is an app identity only; Pull&Bear SKU data was not verified.
             let variant = SelectedVariant(
                 id: "pullandbear:\(code):\(colorIdentity):\(name)",
                 title: "\(colorName) / \(name)",
@@ -112,8 +355,17 @@ enum PullAndBearChecker {
         }
 
         let previousTimeOrigin = try? await readTimeOrigin(in: webView)
-        // Pull&Bear currently uses best-effort page-state detection because a first-party size-level availability API/structured stock state was not verified.
         webView.load(URLRequest(url: requestURL, cachePolicy: .useProtocolCachePolicy, timeoutInterval: navigationTimeout))
+
+        // Primary: in-session structured itxrest API
+        if let structured = await fetchStructuredProduct(in: webView),
+           referenceMatches(expectedCode: metadata.productCode, structuredReference: structured.reference) {
+            if let outcome = parseStructuredOutcome(structured: structured, metadata: metadata) {
+                return outcome
+            }
+        }
+
+        // Fallback: DOM / Shadow DOM parser
         let snapshot = try await waitForProduct(
             in: webView,
             expectedCode: metadata.productCode,
@@ -159,7 +411,8 @@ enum PullAndBearChecker {
             )
         }
 
-        return StoreCheckOutcome(isAvailable: isAvailable, variants: snapshots)
+        let domDiag = "dom_fallback (size: \(metadata.sizeName), available: \(isAvailable))"
+        return StoreCheckOutcome(isAvailable: isAvailable, variants: snapshots, diagnosticDetail: domDiag)
     }
 
     static func check(in webView: WKWebView, product: TrackedProduct, activePageURL: URL?) async throws -> Bool {

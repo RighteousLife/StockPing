@@ -56,6 +56,13 @@ struct StoreProductAnalysis: Sendable {
 struct StoreCheckOutcome: Sendable {
     let isAvailable: Bool
     let variants: [VariantStockSnapshot]
+    var diagnosticDetail: String? = nil
+
+    init(isAvailable: Bool, variants: [VariantStockSnapshot], diagnosticDetail: String? = nil) {
+        self.isAvailable = isAvailable
+        self.variants = variants
+        self.diagnosticDetail = diagnosticDetail
+    }
 }
 
 extension VariantStockSnapshot {
