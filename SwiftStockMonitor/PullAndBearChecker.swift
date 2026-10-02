@@ -15,7 +15,7 @@ enum PullAndBearCheckerError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidURL: "Geçerli bir Pull&Bear Türkiye ürün URL'si girin."
-        case .unsupportedMarket: "Şuanda yalnızca Pull&Bear Türkiye (/tr/) ürünleri destekleniyor."
+        case .unsupportedMarket: "Şu anda yalnızca Pull&Bear Türkiye (/tr/) ürünleri destekleniyor."
         case .pageLoadTimedOut: "Pull&Bear ürün sayfası zamanında hazır olmadı."
         case .productUnavailable: "Pull&Bear ürün bilgisi sayfadan okunamadı."
         case .productCodeMismatch(let expected, let actual): "Pull&Bear ürün kimliği eşleşmedi. Beklenen: \(expected), bulunan: \(actual)."
@@ -58,6 +58,7 @@ enum PullAndBearChecker {
     static let provider: StoreProvider = .pullAndBear
     private static let navigationTimeout: TimeInterval = 30
     private static let pollIntervalNanoseconds: UInt64 = 300_000_000
+    static var shouldSimulateStructuredAPIFailureForTesting: Bool = false
 
     private struct PageSnapshot {
         let readyState: String
@@ -117,6 +118,9 @@ enum PullAndBearChecker {
     }
 
     private static func fetchStructuredProduct(in webView: WKWebView, timeout: TimeInterval = 6.0) async -> PullAndBearStructuredProduct? {
+        if shouldSimulateStructuredAPIFailureForTesting {
+            return nil
+        }
         let script = #"""
         const norm = v => (v || '').trim();
         const resources = performance.getEntriesByType('resource').map(r => r.name);
@@ -386,7 +390,7 @@ enum PullAndBearChecker {
         }
         if let expectedReference = metadata.colorReference,
            let actualReference = snapshot.colorReference,
-           actualReference != expectedReference {
+           actualReference != expectedReference && !actualReference.hasSuffix(expectedReference) && !expectedReference.hasSuffix(actualReference) {
             throw PullAndBearCheckerError.colorUnavailable
         }
         guard let size = snapshot.sizes.first(where: { ($0["name"] as? String)?.caseInsensitiveCompare(metadata.sizeName) == .orderedSame }) else {
