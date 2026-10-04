@@ -58,7 +58,7 @@ enum HMChecker: StoreChecker {
     static var shouldSimulateNextDataFailureForTesting: Bool = false
     static var shouldSimulateJsonLdFailureForTesting: Bool = false
 
-    static func canHandle(_ url: URL) -> Bool {
+    nonisolated static func canHandle(_ url: URL) -> Bool {
         guard let host = url.host?.lowercased(),
               host == "hm.com" || host.hasSuffix(".hm.com") else {
             return false
@@ -68,12 +68,12 @@ enum HMChecker: StoreChecker {
         return path.range(of: #"productpage\.\d{7,10}\.html"#, options: .regularExpression) != nil
     }
 
-    static func normalizedProductURL(from url: URL) -> URL? {
+    nonisolated static func normalizedProductURL(from url: URL) -> URL? {
         guard canHandle(url), let articleID = articleID(from: url) else { return nil }
         return URL(string: "https://www2.hm.com/tr_tr/productpage.\(articleID).html")
     }
 
-    private static func articleID(from url: URL) -> String? {
+    nonisolated static func articleID(from url: URL) -> String? {
         let path = url.path
         guard let match = path.range(of: #"productpage\.(\d{7,10})\.html"#, options: .regularExpression) else {
             return nil
@@ -370,13 +370,21 @@ enum HMChecker: StoreChecker {
                     const ld = JSON.parse(s.textContent);
                     if (ld && ld['@type'] === 'ProductGroup' && Array.isArray(ld.hasVariant)) {
                         for (const v of ld.hasVariant) {
-                            const avail = v.offers && v.offers.availability ? v.offers.availability.includes('InStock') : false;
+                            if (!v.offers || typeof v.offers.availability !== 'string') {
+                                continue;
+                            }
+                            const availStr = v.offers.availability;
+                            const hasInStock = availStr.includes('InStock');
+                            const hasOutOfStock = availStr.includes('OutOfStock') || availStr.includes('SoldOut') || availStr.includes('Discontinued');
+                            if (!hasInStock && !hasOutOfStock) {
+                                continue;
+                            }
                             jsonLdVariants.push({
                                 sku: v.sku || '',
                                 articleCode: v.offers?.url?.match(/productpage\.(\d{10})/)?.[1] || null,
                                 colorName: v.color || '',
                                 sizeName: v.size || 'Standart',
-                                inStock: avail,
+                                inStock: hasInStock,
                                 fewPieceLeft: false
                             });
                         }

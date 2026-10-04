@@ -690,6 +690,13 @@ struct TrackedProduct: Identifiable {
                    m1.colorIdentity == m2.colorIdentity &&
                    m1.sizeName.caseInsensitiveCompare(m2.sizeName) == .orderedSame
         }
+        if provider == .hm {
+            if let m1 = hmMetadata, let m2 = other.hmMetadata {
+                return m1.articleID == m2.articleID && m1.variantID == m2.variantID
+            }
+            return HMChecker.normalizedProductURL(from: productURL) == HMChecker.normalizedProductURL(from: other.productURL) &&
+                   variantID == other.variantID
+        }
         return ShopifyChecker.productIdentity(for: productURL) == ShopifyChecker.productIdentity(for: other.productURL) &&
                variantID == other.variantID
     }
@@ -716,6 +723,13 @@ struct TrackedProduct: Identifiable {
             return m1.productCode == m2.productCode &&
                    m1.colorIdentity == m2.colorIdentity &&
                    m1.sizeName.caseInsensitiveCompare(m2.sizeName) == .orderedSame
+        }
+        if provider == .hm {
+            if let m1 = hmMetadata, let m2 = candidate.hmMetadata {
+                return m1.articleID == m2.articleID && m1.variantID == m2.variantID
+            }
+            return HMChecker.normalizedProductURL(from: self.productURL) == HMChecker.normalizedProductURL(from: productURL) &&
+                   variantID == candidate.variant.id
         }
         return ShopifyChecker.productIdentity(for: self.productURL) == ShopifyChecker.productIdentity(for: productURL) &&
                variantID == candidate.variant.id

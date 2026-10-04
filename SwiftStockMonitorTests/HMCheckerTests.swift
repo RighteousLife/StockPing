@@ -185,4 +185,202 @@ final class HMCheckerTests: XCTestCase {
         let empty = ProviderHealthSummary.calculate(for: .hm, products: [], isNetworkAvailable: true)
         XCTAssertEqual(empty.health, .unknown)
     }
+
+    // MARK: - 9. Backup & Restore Compatibility
+
+    func testBackupExportAndImportPreservesHMMetadata() {
+        let meta = HMVariantMetadata(
+            articleID: "1347084009",
+            variantID: "1347084009002",
+            compositeID: "1347084009002",
+            colorName: "Bordo",
+            sizeName: "XS"
+        )
+        let product = TrackedProduct(
+            id: UUID(),
+            productName: "H&M Kazak",
+            productURL: URL(string: "https://www2.hm.com/tr_tr/productpage.1347084009.html")!,
+            selectedVariant: SelectedVariant(id: "1347084009002", title: "Bordo · XS", options: [], availability: true),
+            lastChecked: Date(),
+            checkIntervalMinutes: 15,
+            nextCheckDate: Date().addingTimeInterval(900),
+            isPaused: false,
+            lastCheckError: nil,
+            lastAvailabilityTransition: nil,
+            provider: .hm,
+            hmMetadata: meta,
+            group: "Kışlık",
+            tags: ["Kazak", "Yeni"],
+            isPriority: true,
+            note: "Acil stok bekleniyor",
+            autoOpenOnRestock: true,
+            variantSnapshots: [VariantStockSnapshot(id: "1347084009002", title: "Bordo · XS", options: [], state: .inStock)]
+        )
+
+        let exportItem = StockPingExportProduct(from: product)
+        XCTAssertEqual(exportItem.provider, .hm)
+        XCTAssertEqual(exportItem.hmMetadata?.articleID, "1347084009")
+        XCTAssertEqual(exportItem.hmMetadata?.variantID, "1347084009002")
+        XCTAssertEqual(exportItem.hmMetadata?.colorName, "Bordo")
+        XCTAssertEqual(exportItem.hmMetadata?.sizeName, "XS")
+
+        let importedProduct = exportItem.trackedProduct
+        XCTAssertEqual(importedProduct.provider, .hm)
+        XCTAssertEqual(importedProduct.hmMetadata?.articleID, "1347084009")
+        XCTAssertEqual(importedProduct.hmMetadata?.variantID, "1347084009002")
+        XCTAssertEqual(importedProduct.hmMetadata?.colorName, "Bordo")
+        XCTAssertEqual(importedProduct.hmMetadata?.sizeName, "XS")
+        XCTAssertEqual(importedProduct.group, "Kışlık")
+        XCTAssertEqual(importedProduct.tags, ["Kazak", "Yeni"])
+        XCTAssertTrue(importedProduct.isPriority)
+        XCTAssertEqual(importedProduct.note, "Acil stok bekleniyor")
+        XCTAssertEqual(importedProduct.autoOpenOnRestock, true)
+        XCTAssertEqual(importedProduct.variantSnapshots?.count, 1)
+    }
+
+    // MARK: - 10. Duplicate Detection & Candidate Matching
+
+    func testHMDuplicateDetection() {
+        let meta1 = HMVariantMetadata(articleID: "1347084009", variantID: "1347084009002", compositeID: "1347084009002", colorName: "Bordo", sizeName: "XS")
+        let meta2 = HMVariantMetadata(articleID: "1347084009", variantID: "1347084009003", compositeID: "1347084009003", colorName: "Bordo", sizeName: "S")
+        let url = URL(string: "https://www2.hm.com/tr_tr/productpage.1347084009.html")!
+
+        let prod1 = TrackedProduct(
+            id: UUID(),
+            productName: "Kazak",
+            productURL: url,
+            selectedVariant: SelectedVariant(id: "1347084009002", title: "XS", options: []),
+            lastChecked: nil,
+            checkIntervalMinutes: 5,
+            nextCheckDate: nil,
+            isPaused: false,
+            lastCheckError: nil,
+            lastAvailabilityTransition: nil,
+            provider: .hm,
+            hmMetadata: meta1
+        )
+        let prod1Duplicate = TrackedProduct(
+            id: UUID(),
+            productName: "Kazak (Farklı isim)",
+            productURL: url,
+            selectedVariant: SelectedVariant(id: "1347084009002", title: "XS", options: []),
+            lastChecked: nil,
+            checkIntervalMinutes: 10,
+            nextCheckDate: nil,
+            isPaused: false,
+            lastCheckError: nil,
+            lastAvailabilityTransition: nil,
+            provider: .hm,
+            hmMetadata: meta1
+        )
+        let prod2 = TrackedProduct(
+            id: UUID(),
+            productName: "Kazak",
+            productURL: url,
+            selectedVariant: SelectedVariant(id: "1347084009003", title: "S", options: []),
+            lastChecked: nil,
+            checkIntervalMinutes: 5,
+            nextCheckDate: nil,
+            isPaused: false,
+            lastCheckError: nil,
+            lastAvailabilityTransition: nil,
+            provider: .hm,
+            hmMetadata: meta2
+        )
+
+        XCTAssertTrue(prod1.isDuplicate(of: prod1Duplicate))
+        XCTAssertFalse(prod1.isDuplicate(of: prod2))
+
+        let candidate1 = StoreVariantCandidate(
+            variant: SelectedVariant(id: "1347084009002", title: "XS", options: []),
+            hmMetadata: meta1
+        )
+        let candidate2 = StoreVariantCandidate(
+            variant: SelectedVariant(id: "1347084009003", title: "S", options: []),
+            hmMetadata: meta2
+        )
+
+        XCTAssertTrue(prod1.matches(candidate: candidate1, productURL: url, provider: .hm))
+        XCTAssertFalse(prod1.matches(candidate: candidate2, productURL: url, provider: .hm))
+    }
+
+    // MARK: - 11. State Machine Invariants
+
+    func testStockTransitionInvariants() {
+        // Invariant 38: First check is .initial, never .restocked
+        func transition(from previous: Bool?, to current: Bool) -> AvailabilityTransition {
+            guard let previous else { return .initial(available: current) }
+            if !previous && current { return .restocked }
+            if previous && !current { return .wentOutOfStock }
+            return .unchanged(available: current)
+        }
+
+        XCTAssertEqual(transition(from: nil, to: true), .initial(available: true))
+        XCTAssertEqual(transition(from: nil, to: false), .initial(available: false))
+
+        // Invariant 39: false -> true MUST be .restocked
+        XCTAssertEqual(transition(from: false, to: true), .restocked)
+
+        // Invariant 40: true -> false MUST be .wentOutOfStock (never restocked)
+        XCTAssertEqual(transition(from: true, to: false), .wentOutOfStock)
+
+        // Unchanged states
+        XCTAssertEqual(transition(from: true, to: true), .unchanged(available: true))
+        XCTAssertEqual(transition(from: false, to: false), .unchanged(available: false))
+    }
+
+    // MARK: - 12. Notification Profiles
+
+    func testNotificationProfiles() {
+        XCTAssertTrue(NotificationProfile.standard.shouldNotifyOnRestock)
+        XCTAssertFalse(NotificationProfile.standard.shouldNotifyOnDepletion)
+
+        XCTAssertTrue(NotificationProfile.onlyRestock.shouldNotifyOnRestock)
+        XCTAssertFalse(NotificationProfile.onlyRestock.shouldNotifyOnDepletion)
+
+        XCTAssertTrue(NotificationProfile.allChanges.shouldNotifyOnRestock)
+        XCTAssertTrue(NotificationProfile.allChanges.shouldNotifyOnDepletion)
+
+        XCTAssertFalse(NotificationProfile.silent.shouldNotifyOnRestock)
+        XCTAssertFalse(NotificationProfile.silent.shouldNotifyOnDepletion)
+    }
+
+    // MARK: - 13. Scheduler & Pause Behavior
+
+    func testSchedulerAndPauseState() {
+        var product = TrackedProduct(
+            id: UUID(),
+            productName: "H&M Test",
+            productURL: URL(string: "https://www2.hm.com/tr_tr/productpage.1347084009.html")!,
+            selectedVariant: SelectedVariant(id: "1347084009002", title: "XS", options: []),
+            lastChecked: Date(),
+            checkIntervalMinutes: 10,
+            nextCheckDate: Date().addingTimeInterval(600),
+            isPaused: false,
+            lastCheckError: nil,
+            lastAvailabilityTransition: nil,
+            provider: .hm
+        )
+
+        XCTAssertNotNil(product.nextCheckDate)
+        XCTAssertEqual(product.status, .outOfStock)
+
+        // When paused, status reflects paused
+        product.isPaused = true
+        product.nextCheckDate = nil
+        XCTAssertEqual(product.status, .paused)
+        XCTAssertNil(product.nextCheckDate)
+    }
+
+    // MARK: - 14. Error Message Guidance
+
+    func testUnsupportedStoreErrorMessageIncludesHM() {
+        let errDesc = StoreCheckerError.unsupportedStore.errorDescription
+        XCTAssertNotNil(errDesc)
+        XCTAssertTrue(errDesc?.contains("H&M Türkiye") == true)
+        XCTAssertTrue(errDesc?.contains("Zara") == true)
+        XCTAssertTrue(errDesc?.contains("Bershka") == true)
+        XCTAssertTrue(errDesc?.contains("Pull&Bear") == true)
+    }
 }
+

@@ -3123,6 +3123,12 @@ private struct ProductDetailView: View {
             switch product.provider {
             case .hm:
                 if let metadata = product.hmMetadata {
+                    if let color = metadata.colorName, !color.isEmpty {
+                        infoRow("Renk", color)
+                    }
+                    if let size = metadata.sizeName, !size.isEmpty {
+                        infoRow("Beden", size)
+                    }
                     technicalRow("Article ID", metadata.articleID)
                     if let variantID = metadata.variantID {
                         technicalRow("Variant ID", variantID)
@@ -5297,6 +5303,7 @@ private struct AddProductSheet: View {
                 zaraMetadata: candidate.zaraMetadata,
                 bershkaMetadata: candidate.bershkaMetadata,
                 pullAndBearMetadata: candidate.pullAndBearMetadata,
+                hmMetadata: candidate.hmMetadata,
                 events: [],
                 variantSnapshots: snapshots
             )

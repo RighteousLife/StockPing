@@ -22,6 +22,7 @@ struct StockPingExportProduct: Codable {
     var zaraMetadata: ZaraVariantMetadata?
     var bershkaMetadata: BershkaVariantMetadata?
     var pullAndBearMetadata: PullAndBearVariantMetadata?
+    var hmMetadata: HMVariantMetadata?
     var group: String?
     var tags: [String]
     var isPriority: Bool?
@@ -43,6 +44,7 @@ struct StockPingExportProduct: Codable {
         self.zaraMetadata = product.zaraMetadata
         self.bershkaMetadata = product.bershkaMetadata
         self.pullAndBearMetadata = product.pullAndBearMetadata
+        self.hmMetadata = product.hmMetadata
         self.group = product.group
         self.tags = product.tags
         self.isPriority = product.isPriority ? true : nil
@@ -70,6 +72,7 @@ struct StockPingExportProduct: Codable {
             zaraMetadata: zaraMetadata,
             bershkaMetadata: bershkaMetadata,
             pullAndBearMetadata: pullAndBearMetadata,
+            hmMetadata: hmMetadata,
             events: [],
             latestDiagnostic: nil,
             group: group,

@@ -172,7 +172,7 @@ enum StoreCheckerError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unsupportedStore: "Bu mağaza türü henüz desteklenmiyor. Shopify, Zara Türkiye, Bershka Türkiye veya Pull&Bear Türkiye ürün URL'si kullanın."
+        case .unsupportedStore: "Bu mağaza türü henüz desteklenmiyor. Shopify, Zara Türkiye, Bershka Türkiye, Pull&Bear Türkiye veya H&M Türkiye ürün URL'si kullanın."
         }
     }
 }
