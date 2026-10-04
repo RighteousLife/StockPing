@@ -24,6 +24,7 @@
 			A1000000000000000000000F /* NotificationAuditLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000F /* NotificationAuditLog.swift */; };
 			A10000000000000000000010 /* ProductOrganizationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* ProductOrganizationStore.swift */; };
 			A10000000000000000000011 /* ProductBackupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* ProductBackupService.swift */; };
+			A10000000000000000000013 /* HMCheckerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* HMCheckerTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -45,6 +46,8 @@
 			A2000000000000000000000F /* NotificationAuditLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationAuditLog.swift; sourceTree = "<group>"; };
 			A20000000000000000000010 /* ProductOrganizationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductOrganizationStore.swift; sourceTree = "<group>"; };
 			A20000000000000000000011 /* ProductBackupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductBackupService.swift; sourceTree = "<group>"; };
+			A20000000000000000000013 /* HMCheckerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HMCheckerTests.swift; sourceTree = "<group>"; };
+			A20000000000000000000014 /* SwiftStockMonitorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SwiftStockMonitorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -52,6 +55,7 @@
 				isa = PBXGroup;
 				children = (
 					A30000000000000000000002 /* SwiftStockMonitor */,
+					A30000000000000000000005 /* SwiftStockMonitorTests */,
 					A30000000000000000000004 /* Frameworks */,
 					A30000000000000000000003 /* Products */,
 				);
@@ -65,7 +69,7 @@
 			};
 			A30000000000000000000003 /* Products */ = {
 				isa = PBXGroup;
-				children = (A20000000000000000000002 /* SwiftStockMonitor.app */,);
+				children = (A20000000000000000000002 /* SwiftStockMonitor.app */, A20000000000000000000014 /* SwiftStockMonitorTests.xctest */,);
 				name = Products;
 				sourceTree = "<group>";
 			};
@@ -73,6 +77,12 @@
 				isa = PBXGroup;
 				children = (A20000000000000000000003 /* WebKit.framework */,);
 				name = Frameworks;
+				sourceTree = "<group>";
+			};
+			A30000000000000000000005 /* SwiftStockMonitorTests */ = {
+				isa = PBXGroup;
+				children = (A20000000000000000000013 /* HMCheckerTests.swift */,);
+				path = SwiftStockMonitorTests;
 				sourceTree = "<group>";
 			};
 /* End PBXGroup section */
@@ -93,6 +103,23 @@
 				productReference = A20000000000000000000002 /* SwiftStockMonitor.app */;
 				productType = "com.apple.product-type.application";
 			};
+			A40000000000000000000002 /* SwiftStockMonitorTests */ = {
+				isa = PBXNativeTarget;
+				buildConfigurationList = A70000000000000000000003;
+				buildPhases = (
+					A50000000000000000000004 /* Sources */,
+					A50000000000000000000005 /* Frameworks */,
+					A50000000000000000000006 /* Resources */,
+				);
+				buildRules = ();
+				dependencies = (
+					A90000000000000000000001 /* PBXTargetDependency */,
+				);
+				name = "SwiftStockMonitorTests";
+				productName = "SwiftStockMonitorTests";
+				productReference = A20000000000000000000014 /* SwiftStockMonitorTests.xctest */;
+				productType = "com.apple.product-type.bundle.unit-test";
+			};
 /* End PBXNativeTarget section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -100,6 +127,12 @@
 				isa = PBXSourcesBuildPhase;
 				buildActionMask = 2147483647;
 				files = (A10000000000000000000001 /* SwiftStockMonitorApp.swift in Sources */, A10000000000000000000005 /* ShopifyChecker.swift in Sources */, A10000000000000000000006 /* ProductModels.swift in Sources */, A10000000000000000000007 /* StoreChecker.swift in Sources */, A10000000000000000000008 /* ZaraChecker.swift in Sources */, A10000000000000000000009 /* ProductEvents.swift in Sources */, A1000000000000000000000A /* TurkishRelativeTime.swift in Sources */, A1000000000000000000000B /* BershkaChecker.swift in Sources */, A1000000000000000000000C /* PullAndBearChecker.swift in Sources */, A10000000000000000000012 /* HMChecker.swift in Sources */, A1000000000000000000000D /* SleepPreventionManager.swift in Sources */, A1000000000000000000000E /* EmailNotificationService.swift in Sources */, A1000000000000000000000F /* NotificationAuditLog.swift in Sources */, A10000000000000000000010 /* ProductOrganizationStore.swift in Sources */, A10000000000000000000011 /* ProductBackupService.swift in Sources */,);
+				runOnlyForDeploymentPostprocessing = 0;
+			};
+			A50000000000000000000004 /* Sources */ = {
+				isa = PBXSourcesBuildPhase;
+				buildActionMask = 2147483647;
+				files = (A10000000000000000000013 /* HMCheckerTests.swift in Sources */,);
 				runOnlyForDeploymentPostprocessing = 0;
 			};
 /* End PBXSourcesBuildPhase section */
@@ -111,6 +144,12 @@
 				files = (A10000000000000000000002 /* WebKit.framework in Frameworks */,);
 				runOnlyForDeploymentPostprocessing = 0;
 			};
+			A50000000000000000000005 /* Frameworks */ = {
+				isa = PBXFrameworksBuildPhase;
+				buildActionMask = 2147483647;
+				files = ();
+				runOnlyForDeploymentPostprocessing = 0;
+			};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXResourcesBuildPhase section */
@@ -120,7 +159,31 @@
 				files = (A10000000000000000000003 /* Assets.xcassets in Resources */,);
 				runOnlyForDeploymentPostprocessing = 0;
 			};
+			A50000000000000000000006 /* Resources */ = {
+				isa = PBXResourcesBuildPhase;
+				buildActionMask = 2147483647;
+				files = ();
+				runOnlyForDeploymentPostprocessing = 0;
+			};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXContainerItemProxy section */
+			AA0000000000000000000001 /* PBXContainerItemProxy */ = {
+				isa = PBXContainerItemProxy;
+				containerPortal = A60000000000000000000001 /* Project object */;
+				proxyType = 1;
+				remoteGlobalIDString = A40000000000000000000001;
+				remoteInfo = "SwiftStock Monitor";
+			};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXTargetDependency section */
+			A90000000000000000000001 /* PBXTargetDependency */ = {
+				isa = PBXTargetDependency;
+				target = A40000000000000000000001 /* SwiftStock Monitor */;
+				targetProxy = AA0000000000000000000001 /* PBXContainerItemProxy */;
+			};
+/* End PBXTargetDependency section */
 
 /* Begin PBXProject section */
 			A60000000000000000000001 /* Project object */ = {
@@ -134,7 +197,7 @@
 				productRefGroup = A30000000000000000000003 /* Products */;
 				projectDirPath = "";
 				projectRoot = "";
-				targets = (A40000000000000000000001 /* SwiftStock Monitor */,);
+				targets = (A40000000000000000000001 /* SwiftStock Monitor */, A40000000000000000000002 /* SwiftStockMonitorTests */,);
 			};
 /* End PBXProject section */
 
@@ -149,6 +212,7 @@
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_VERSION = 6.0;
 				SWIFT_STRICT_CONCURRENCY = complete;
+				ENABLE_TESTABILITY = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = StockPing;
 				INFOPLIST_KEY_CFBundleName = StockPing;
@@ -167,6 +231,7 @@
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_VERSION = 6.0;
 				SWIFT_STRICT_CONCURRENCY = complete;
+				ENABLE_TESTABILITY = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = StockPing;
 				INFOPLIST_KEY_CFBundleName = StockPing;
@@ -177,6 +242,35 @@
 				}; name = Release; };
 			A70000000000000000000001 /* Build configuration list for PBXNativeTarget */ = {isa = XCConfigurationList; buildConfigurations = (A80000000000000000000001 /* Debug */, A80000000000000000000002 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 			A70000000000000000000002 /* Build configuration list for PBXProject */ = {isa = XCConfigurationList; buildConfigurations = (A80000000000000000000001 /* Debug */, A80000000000000000000002 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+			A80000000000000000000003 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {
+				ARCHS = arm64;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGNING_ALLOWED = NO;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.swiftstock.monitor.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_VERSION = 6.0;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/StockPing.app/Contents/MacOS/StockPing";
+				GENERATE_INFOPLIST_FILE = YES;
+				}; name = Debug; };
+			A80000000000000000000004 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {
+				ARCHS = arm64;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGNING_ALLOWED = NO;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.swiftstock.monitor.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_VERSION = 6.0;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/StockPing.app/Contents/MacOS/StockPing";
+				GENERATE_INFOPLIST_FILE = YES;
+				}; name = Release; };
+			A70000000000000000000003 /* Build configuration list for PBXNativeTarget */ = {isa = XCConfigurationList; buildConfigurations = (A80000000000000000000003 /* Debug */, A80000000000000000000004 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 /* End PBXBuildConfiguration section */
 
 	};

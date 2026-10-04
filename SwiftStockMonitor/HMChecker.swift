@@ -471,46 +471,42 @@ enum HMChecker: StoreChecker {
     }
 
     private static func evaluateJavaScript(_ script: String, in webView: WKWebView) async throws -> String {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
-            let gate = HMJavaScriptEvaluation(continuation: continuation)
-            gate.timeoutTask = Task { @MainActor in
-                do {
-                    try await Task.sleep(for: .seconds(15))
-                } catch {
-                    return
-                }
-                gate.finish(.failure(HMCheckerError.javascriptEvaluationTimedOut))
+        let evalTask = Task { @MainActor in
+            let asyncScript = "return await " + script
+            let rawResult = try await webView.callAsyncJavaScript(
+                asyncScript,
+                arguments: [:],
+                in: nil,
+                contentWorld: .page
+            )
+            guard let string = rawResult as? String else {
+                throw HMCheckerError.productUnavailable
+            }
+            return string
+        }
+
+        return try await withThrowingTaskGroup(of: String.self) { group in
+            group.addTask {
+                try await Task.sleep(for: .seconds(15))
+                throw HMCheckerError.javascriptEvaluationTimedOut
+            }
+            group.addTask {
+                try await evalTask.value
             }
 
-            webView.evaluateJavaScript(script) { result, error in
-                Task { @MainActor in
-                    if let error {
-                        gate.finish(.failure(error))
-                    } else if let result = result as? String {
-                        gate.finish(.success(result))
-                    } else {
-                        gate.finish(.failure(HMCheckerError.productUnavailable))
-                    }
+            do {
+                guard let result = try await group.next() else {
+                    throw HMCheckerError.productUnavailable
                 }
+                group.cancelAll()
+                evalTask.cancel()
+                return result
+            } catch {
+                group.cancelAll()
+                evalTask.cancel()
+                throw error
             }
         }
     }
 }
 
-@MainActor
-private final class HMJavaScriptEvaluation {
-    private var continuation: CheckedContinuation<String, Error>?
-    var timeoutTask: Task<Void, Never>?
-
-    init(continuation: CheckedContinuation<String, Error>) {
-        self.continuation = continuation
-    }
-
-    func finish(_ result: Result<String, Error>) {
-        guard let continuation else { return }
-        self.continuation = nil
-        timeoutTask?.cancel()
-        timeoutTask = nil
-        continuation.resume(with: result)
-    }
-}
