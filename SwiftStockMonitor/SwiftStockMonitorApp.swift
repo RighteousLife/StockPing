@@ -688,6 +688,7 @@ struct ContentView: View {
         case .zara: "Zara Türkiye"
         case .bershka: "Bershka Türkiye"
         case .pullAndBear: "Pull&Bear Türkiye"
+        case .hm: "H&M Türkiye"
         case .shopify: product.productURL.host() ?? "Shopify mağazası"
         }
     }
@@ -3120,6 +3121,13 @@ private struct ProductDetailView: View {
             infoRow("Varyant", product.selectedVariant.displayDescription)
 
             switch product.provider {
+            case .hm:
+                if let metadata = product.hmMetadata {
+                    technicalRow("Article ID", metadata.articleID)
+                    if let variantID = metadata.variantID {
+                        technicalRow("Variant ID", variantID)
+                    }
+                }
             case .shopify:
                 technicalRow("Variant ID", product.selectedVariant.id)
             case .zara:
@@ -3202,6 +3210,7 @@ private struct ProductDetailView: View {
         case .zara: "Zara Türkiye"
         case .bershka: "Bershka Türkiye"
         case .pullAndBear: "Pull&Bear Türkiye"
+        case .hm: "H&M Türkiye"
         case .shopify: product.productURL.host() ?? "Shopify mağazası"
         }
     }
@@ -3634,6 +3643,7 @@ private struct MonitoringDashboardView: View {
         case .zara: "Zara Türkiye"
         case .bershka: "Bershka Türkiye"
         case .pullAndBear: "Pull&Bear Türkiye"
+        case .hm: "H&M Türkiye"
         case .shopify: product.productURL.host() ?? "Shopify mağazası"
         }
     }
@@ -4413,6 +4423,7 @@ private struct StorePageWebView: NSViewRepresentable {
             switch provider {
             case .shopify: timeout = .seconds(15)
             case .bershka: timeout = .seconds(30)
+            case .hm: timeout = .seconds(40)
             // These providers do not require page state for their stock request,
             // but their check still waits for the initial WebView readiness.
             // Bound that queued phase too, before the provider safety timer starts.

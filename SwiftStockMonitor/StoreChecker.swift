@@ -3,11 +3,12 @@ import WebKit
 
 struct StoreVariantCandidate: Identifiable, Sendable {
     var variant: SelectedVariant
-    var zaraMetadata: ZaraVariantMetadata?
-    var bershkaMetadata: BershkaVariantMetadata?
-    var bershkaSnapshot: BershkaAvailabilitySnapshot?
-    var pullAndBearMetadata: PullAndBearVariantMetadata?
-    var pullAndBearInitialAvailability: Bool?
+    var zaraMetadata: ZaraVariantMetadata? = nil
+    var bershkaMetadata: BershkaVariantMetadata? = nil
+    var bershkaSnapshot: BershkaAvailabilitySnapshot? = nil
+    var pullAndBearMetadata: PullAndBearVariantMetadata? = nil
+    var hmMetadata: HMVariantMetadata? = nil
+    var pullAndBearInitialAvailability: Bool? = nil
 
     var id: String { variant.id }
     var displayTitle: String { variant.displayTitle ?? variant.displayDescription }
@@ -145,6 +146,8 @@ enum StoreCheckerRouter {
     }
 
     private static func checker(for url: URL) -> (any StoreChecker.Type)? {
+        if HMChecker.canHandle(url) { return HMChecker.self }
+
         if PullAndBearChecker.canHandle(url) { return PullAndBearChecker.self }
         if BershkaChecker.canHandle(url) { return BershkaChecker.self }
         if ZaraChecker.canHandle(url) { return ZaraChecker.self }
@@ -158,6 +161,8 @@ enum StoreCheckerRouter {
         case .zara: ZaraChecker.self
         case .bershka: BershkaChecker.self
         case .pullAndBear: PullAndBearChecker.self
+        case .hm: HMChecker.self
+
         }
     }
 }

@@ -162,13 +162,16 @@ enum StoreProvider: String, Codable, Sendable, CaseIterable {
     case zara
     case bershka
     case pullAndBear
+    case hm
 
-    var displayName: String {
+
+        var displayName: String {
         switch self {
-        case .shopify: "Shopify"
-        case .zara: "Zara"
-        case .bershka: "Bershka"
-        case .pullAndBear: "Pull&Bear"
+        case .shopify: return "Shopify"
+        case .zara: return "Zara"
+        case .bershka: return "Bershka"
+        case .pullAndBear: return "Pull&Bear"
+        case .hm: return "H&M"
         }
     }
 }
@@ -243,6 +246,14 @@ struct BershkaVariantMetadata: Codable, Hashable, Sendable {
     var sku: String
     var mastersSizeID: String?
     var partnumber: String?
+}
+
+struct HMVariantMetadata: Codable, Hashable, Sendable {
+    var articleID: String
+    var variantID: String?
+    var compositeID: String
+    var colorName: String?
+    var sizeName: String?
 }
 
 struct PullAndBearVariantMetadata: Codable, Hashable, Sendable {
@@ -548,12 +559,13 @@ enum TechnicalDetailSanitizer {
 }
 
 extension StoreProvider {
-    var defaultCheckerName: String {
+        var defaultCheckerName: String {
         switch self {
-        case .shopify: "ShopifyChecker"
-        case .zara: "ZaraChecker"
-        case .bershka: "BershkaChecker"
-        case .pullAndBear: "PullAndBearChecker"
+        case .shopify: return "ShopifyChecker"
+        case .zara: return "ZaraChecker"
+        case .bershka: return "BershkaChecker"
+        case .pullAndBear: return "PullAndBearChecker"
+        case .hm: return "HMChecker"
         }
     }
 }
@@ -567,6 +579,8 @@ extension TrackedProduct {
             return "Bershka Türkiye"
         case .pullAndBear:
             return "Pull&Bear Türkiye"
+        case .hm:
+            return "H&M Türkiye"
         case .shopify:
             if let host = productURL.host() {
                 return "Shopify (\(host))"
@@ -591,6 +605,8 @@ struct TrackedProduct: Identifiable {
     var zaraMetadata: ZaraVariantMetadata? = nil
     var bershkaMetadata: BershkaVariantMetadata? = nil
     var pullAndBearMetadata: PullAndBearVariantMetadata? = nil
+    var hmMetadata: HMVariantMetadata? = nil
+
     var events: [ProductEvent] = []
     var latestDiagnostic: ProviderDiagnostic? = nil
     var group: String? = nil
@@ -753,6 +769,8 @@ private struct SavedTrackedProduct: Codable {
     let zaraMetadata: ZaraVariantMetadata?
     let bershkaMetadata: BershkaVariantMetadata?
     let pullAndBearMetadata: PullAndBearVariantMetadata?
+    let hmMetadata: HMVariantMetadata?
+
     let events: [ProductEvent]
     let latestDiagnostic: ProviderDiagnostic?
     let group: String?
@@ -781,6 +799,8 @@ private struct SavedTrackedProduct: Codable {
         zaraMetadata = product.zaraMetadata
         bershkaMetadata = product.bershkaMetadata
         pullAndBearMetadata = product.pullAndBearMetadata
+        hmMetadata = product.hmMetadata
+
         events = product.events
         latestDiagnostic = product.latestDiagnostic
         group = product.group
@@ -799,7 +819,7 @@ private struct SavedTrackedProduct: Codable {
     private enum CodingKeys: String, CodingKey {
         case id, productName, productURL, selectedVariant, lastChecked
         case checkIntervalMinutes, nextCheckDate, isPaused, lastCheckError
-        case provider, zaraMetadata, bershkaMetadata, pullAndBearMetadata, events, latestDiagnostic
+        case provider, zaraMetadata, bershkaMetadata, pullAndBearMetadata, hmMetadata, events, latestDiagnostic
         case group, tags
         case consecutiveUnchangedChecks, consecutiveFailureChecks
         case isPriority, note, isMacOSNotificationEnabled, isEmailNotificationEnabled
@@ -837,6 +857,8 @@ private struct SavedTrackedProduct: Codable {
         zaraMetadata = try values.decodeIfPresent(ZaraVariantMetadata.self, forKey: .zaraMetadata)
         bershkaMetadata = try values.decodeIfPresent(BershkaVariantMetadata.self, forKey: .bershkaMetadata)
         pullAndBearMetadata = try values.decodeIfPresent(PullAndBearVariantMetadata.self, forKey: .pullAndBearMetadata)
+        hmMetadata = try values.decodeIfPresent(HMVariantMetadata.self, forKey: .hmMetadata)
+
         events = Array((try values.decodeIfPresent([ProductEvent].self, forKey: .events) ?? []).suffix(50))
         latestDiagnostic = try values.decodeIfPresent(ProviderDiagnostic.self, forKey: .latestDiagnostic)
         group = try values.decodeIfPresent(String.self, forKey: .group)
@@ -867,6 +889,8 @@ private struct SavedTrackedProduct: Codable {
         try values.encodeIfPresent(zaraMetadata, forKey: .zaraMetadata)
         try values.encodeIfPresent(bershkaMetadata, forKey: .bershkaMetadata)
         try values.encodeIfPresent(pullAndBearMetadata, forKey: .pullAndBearMetadata)
+        try values.encodeIfPresent(hmMetadata, forKey: .hmMetadata)
+
         try values.encode(events, forKey: .events)
         try values.encodeIfPresent(latestDiagnostic, forKey: .latestDiagnostic)
         try values.encodeIfPresent(group, forKey: .group)
@@ -950,6 +974,8 @@ private extension SavedTrackedProduct {
             zaraMetadata: zaraMetadata,
             bershkaMetadata: bershkaMetadata,
             pullAndBearMetadata: pullAndBearMetadata,
+            hmMetadata: hmMetadata,
+
             events: events,
             latestDiagnostic: latestDiagnostic,
             group: group,

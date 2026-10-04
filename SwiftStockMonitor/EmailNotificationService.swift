@@ -55,6 +55,7 @@ final class EmailNotificationService: ObservableObject {
         case .zara: store = "Zara Türkiye"
         case .bershka: store = "Bershka Türkiye"
         case .pullAndBear: store = "Pull&Bear Türkiye"
+        case .hm: store = "H&M Türkiye"
         case .shopify: store = product.productURL.host() ?? "Shopify Mağazası"
         }
 
@@ -102,6 +103,7 @@ final class EmailNotificationService: ObservableObject {
         case .zara: store = "Zara Türkiye"
         case .bershka: store = "Bershka Türkiye"
         case .pullAndBear: store = "Pull&Bear Türkiye"
+        case .hm: store = "H&M Türkiye"
         case .shopify: store = product.productURL.host() ?? "Shopify Mağazası"
         }
 
