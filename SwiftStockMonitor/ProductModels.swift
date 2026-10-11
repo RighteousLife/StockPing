@@ -525,6 +525,81 @@ struct ProviderHealthSummary: Identifiable, Sendable {
     }
 }
 
+enum ProductReliabilityLevel: String, Codable, Sendable, CaseIterable {
+    case high
+    case warning
+    case unknown
+
+    var title: String {
+        switch self {
+        case .high: "Yüksek"
+        case .warning: "Uyarı"
+        case .unknown: "Bilinmiyor"
+        }
+    }
+
+    var displayName: String { title }
+
+    var symbol: String {
+        switch self {
+        case .high: "shield.checkmark.fill"
+        case .warning: "exclamationmark.triangle.fill"
+        case .unknown: "questionmark.circle"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .high: .green
+        case .warning: .orange
+        case .unknown: .secondary
+        }
+    }
+}
+
+struct ProductReliability: Sendable, Hashable {
+    let level: ProductReliabilityLevel
+    let description: String
+    let consecutiveFailures: Int
+    let lastSuccessfulCheck: Date?
+    let diagnosticOutcome: DiagnosticOutcome?
+
+    var reason: String { description }
+
+    static func calculate(for product: TrackedProduct) -> ProductReliability {
+        let failures = product.consecutiveFailureChecks
+        let lastSuccess = product.latestDiagnostic?.lastSuccessfulCheckDate ?? (product.lastCheckError == nil ? product.lastChecked : nil)
+        let outcome = product.latestDiagnostic?.outcome
+
+        if product.status == .error || product.lastCheckError != nil || failures > 0 || outcome == .providerFailure || outcome == .timeout || outcome == .pageLoadFailure {
+            let reason = product.lastCheckError ?? product.latestDiagnostic?.userMessage ?? "Son kontrollerde hata tespit edildi"
+            return ProductReliability(
+                level: .warning,
+                description: reason,
+                consecutiveFailures: max(1, failures),
+                lastSuccessfulCheck: lastSuccess,
+                diagnosticOutcome: outcome
+            )
+        } else if product.lastChecked != nil && failures == 0 {
+            return ProductReliability(
+                level: .high,
+                description: "Kontroller sorunsuz çalışıyor",
+                consecutiveFailures: 0,
+                lastSuccessfulCheck: lastSuccess,
+                diagnosticOutcome: outcome ?? .success
+            )
+        } else {
+            return ProductReliability(
+                level: .unknown,
+                description: "Henüz kontrol yapılmadı",
+                consecutiveFailures: 0,
+                lastSuccessfulCheck: nil,
+                diagnosticOutcome: nil
+            )
+        }
+    }
+}
+
 enum TechnicalDetailSanitizer {
     static func sanitize(_ raw: String) -> String {
         var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -645,6 +720,10 @@ struct TrackedProduct: Identifiable {
         if selectedVariant.availability == true { return .inStock }
         if selectedVariant.availability == false { return .outOfStock }
         return .unchecked
+    }
+
+    var reliability: ProductReliability {
+        ProductReliability.calculate(for: self)
     }
 
     var stockStatistics: StockStatistics {

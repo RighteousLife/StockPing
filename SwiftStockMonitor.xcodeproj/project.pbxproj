@@ -25,6 +25,7 @@
 			A10000000000000000000010 /* ProductOrganizationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* ProductOrganizationStore.swift */; };
 			A10000000000000000000011 /* ProductBackupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* ProductBackupService.swift */; };
 			A10000000000000000000013 /* HMCheckerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* HMCheckerTests.swift */; };
+			A10000000000000000000015 /* ClosedDisplayAndMonitoringTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000015 /* ClosedDisplayAndMonitoringTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -47,6 +48,7 @@
 			A20000000000000000000010 /* ProductOrganizationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductOrganizationStore.swift; sourceTree = "<group>"; };
 			A20000000000000000000011 /* ProductBackupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductBackupService.swift; sourceTree = "<group>"; };
 			A20000000000000000000013 /* HMCheckerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HMCheckerTests.swift; sourceTree = "<group>"; };
+			A20000000000000000000015 /* ClosedDisplayAndMonitoringTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClosedDisplayAndMonitoringTests.swift; sourceTree = "<group>"; };
 			A20000000000000000000014 /* SwiftStockMonitorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SwiftStockMonitorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -81,7 +83,10 @@
 			};
 			A30000000000000000000005 /* SwiftStockMonitorTests */ = {
 				isa = PBXGroup;
-				children = (A20000000000000000000013 /* HMCheckerTests.swift */,);
+				children = (
+					A20000000000000000000013 /* HMCheckerTests.swift */,
+					A20000000000000000000015 /* ClosedDisplayAndMonitoringTests.swift */,
+				);
 				path = SwiftStockMonitorTests;
 				sourceTree = "<group>";
 			};
@@ -132,7 +137,10 @@
 			A50000000000000000000004 /* Sources */ = {
 				isa = PBXSourcesBuildPhase;
 				buildActionMask = 2147483647;
-				files = (A10000000000000000000013 /* HMCheckerTests.swift in Sources */,);
+				files = (
+					A10000000000000000000013 /* HMCheckerTests.swift in Sources */,
+					A10000000000000000000015 /* ClosedDisplayAndMonitoringTests.swift in Sources */,
+				);
 				runOnlyForDeploymentPostprocessing = 0;
 			};
 /* End PBXSourcesBuildPhase section */
@@ -218,7 +226,7 @@
 				INFOPLIST_KEY_CFBundleName = StockPing;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "StockPing, stok bildirimlerini e-posta ile iletmek için Mail uygulamasını kullanır.";
 				}; name = Debug; };
 			A80000000000000000000002 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {
@@ -237,7 +245,7 @@
 				INFOPLIST_KEY_CFBundleName = StockPing;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "StockPing, stok bildirimlerini e-posta ile iletmek için Mail uygulamasını kullanır.";
 				}; name = Release; };
 			A70000000000000000000001 /* Build configuration list for PBXNativeTarget */ = {isa = XCConfigurationList; buildConfigurations = (A80000000000000000000001 /* Debug */, A80000000000000000000002 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };

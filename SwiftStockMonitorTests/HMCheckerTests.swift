@@ -352,7 +352,7 @@ final class HMCheckerTests: XCTestCase {
             id: UUID(),
             productName: "H&M Test",
             productURL: URL(string: "https://www2.hm.com/tr_tr/productpage.1347084009.html")!,
-            selectedVariant: SelectedVariant(id: "1347084009002", title: "XS", options: []),
+            selectedVariant: SelectedVariant(id: "1347084009002", title: "XS", options: [], availability: false),
             lastChecked: Date(),
             checkIntervalMinutes: 10,
             nextCheckDate: Date().addingTimeInterval(600),
