@@ -6147,16 +6147,18 @@ private struct AddProductSheet: View {
                     Label(duplicateError, systemImage: "exclamationmark.circle.fill")
                         .font(.callout)
                         .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 if let productName {
                     GroupBox {
                         VStack(alignment: .leading, spacing: 10) {
-                            HStack {
+                            HStack(alignment: .firstTextBaseline) {
                                 Text(productName)
                                     .font(.headline)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                Spacer()
+                                    .lineLimit(2)
+                                    .truncationMode(.tail)
+                                Spacer(minLength: 8)
                                 Text(provider.displayName)
                                     .font(.caption.weight(.medium))
                                     .foregroundStyle(.secondary)
@@ -6179,7 +6181,7 @@ private struct AddProductSheet: View {
                                         }
                                     }
                                     .pickerStyle(.menu)
-                                    .frame(maxWidth: 220)
+                                    .frame(maxWidth: 180)
                                 }
 
                                 Spacer(minLength: 0)
@@ -6218,27 +6220,7 @@ private struct AddProductSheet: View {
 
                             Divider()
 
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Akıllı Takip Kuralı")
-                                    .font(.subheadline.weight(.medium))
-
-                                Picker("Akıllı Takip Kuralı", selection: $selectedTrackingRule) {
-                                    ForEach(SmartTrackingRule.allCases) { rule in
-                                        Label(rule.title, systemImage: rule.symbol).tag(rule)
-                                    }
-                                }
-                                .labelsHidden()
-                                .pickerStyle(.segmented)
-
-                                let firstCandidate = variants.first { selectedVariantIDs.contains($0.id) }
-                                let colVal = firstCandidate?.variant.options.first(where: { SmartTrackingRule.isColorOptionName($0.name) })?.value
-                                let szVal = firstCandidate?.variant.options.first(where: { SmartTrackingRule.isSizeOptionName($0.name) })?.value
-
-                                Text(selectedTrackingRule.preview(color: colVal, size: szVal))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.top, 4)
+                            smartTrackingSelector
                         }
                         .padding(4)
                     }
@@ -6261,6 +6243,7 @@ private struct AddProductSheet: View {
                 }
             }
             .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .navigationTitle("Yeni Ürün Ekle")
             .background {
                 if let analysisURL {
@@ -6282,7 +6265,7 @@ private struct AddProductSheet: View {
                 }
             }
         }
-        .frame(minWidth: 520, idealWidth: 580, minHeight: 400, idealHeight: 520)
+        .frame(minWidth: 480, idealWidth: 540, maxWidth: 640, minHeight: 460, idealHeight: 520)
         .onAppear {
             isURLFieldFocused = true
         }
@@ -6418,6 +6401,8 @@ private struct AddProductSheet: View {
                 .font(.body)
                 .foregroundStyle(isTracked ? .secondary : .primary)
                 .strikethrough(isTracked)
+                .lineLimit(1)
+                .truncationMode(.tail)
 
             Spacer()
 
@@ -6465,6 +6450,69 @@ private struct AddProductSheet: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    @ViewBuilder
+    private var smartTrackingSelector: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Akıllı Takip Kuralı")
+                .font(.subheadline.weight(.medium))
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 8)], spacing: 8) {
+                ForEach(SmartTrackingRule.allCases) { rule in
+                    let isSelected = selectedTrackingRule == rule
+                    Button {
+                        selectedTrackingRule = rule
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: rule.symbol)
+                                .font(.subheadline)
+                                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+
+                            Text(rule.title)
+                                .font(.callout)
+                                .fontWeight(isSelected ? .semibold : .regular)
+                                .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                                .multilineTextAlignment(.leading)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+
+                            Spacer(minLength: 4)
+
+                            if isSelected {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(Color.accentColor)
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(isSelected ? Color.accentColor.opacity(0.12) : Color(nsColor: .controlBackgroundColor).opacity(0.5))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(isSelected ? Color.accentColor.opacity(0.5) : Color.secondary.opacity(0.15), lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(rule.title)
+                    .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+                }
+            }
+
+            let firstCandidate = variants.first { selectedVariantIDs.contains($0.id) }
+            let colVal = firstCandidate?.variant.options.first(where: { SmartTrackingRule.isColorOptionName($0.name) })?.value
+            let szVal = firstCandidate?.variant.options.first(where: { SmartTrackingRule.isSizeOptionName($0.name) })?.value
+
+            Text(selectedTrackingRule.preview(color: colVal, size: szVal))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, 4)
     }
 
     private static func validatedProductURL(_ value: String) -> URL? {
