@@ -648,7 +648,6 @@ struct ContentView: View {
     @State private var pendingCheckContinuation: CheckedContinuation<Void, Never>?
     @State private var checkSequenceTask: Task<Void, Never>?
     @State private var showingDashboard = false
-    @State private var showingInspector = false
     @State private var activeRestockBanner: InAppRestockEvent?
     @State private var showingNoteAlert = false
     @State private var noteDraftText = ""
@@ -997,9 +996,6 @@ struct ContentView: View {
             } message: {
                 Text("Seçilen ürünler takipten kaldırılacak.")
             }
-            .inspector(isPresented: $showingInspector) {
-                inspectorContent
-            }
             .alert("Not Düzenle", isPresented: $showingNoteAlert) {
                 TextField("Not girin...", text: $noteDraftText)
                 Button("Kaydet") {
@@ -1196,39 +1192,6 @@ struct ContentView: View {
             .opacity(0)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
-        }
-    }
-
-    @ViewBuilder
-    private var inspectorContent: some View {
-        if let selectedProductIndex {
-            let product = trackedProducts[selectedProductIndex]
-            ProductInspectorView(
-                product: product,
-                storeName: storeName(for: product),
-                onOpenProduct: { NSWorkspace.shared.open(product.productURL) },
-                onTogglePause: { setPaused(!product.isPaused, for: product.id) },
-                onTogglePriority: { togglePriority(for: product.id) },
-                onIntervalChange: { updateCheckInterval($0, for: product.id) },
-                onGroupChange: { updateGroup($0, for: product.id) },
-                onAddTag: { addTag($0, for: product.id) },
-                onRemoveTag: { removeTag($0, for: product.id) }
-            )
-        } else {
-            VStack(spacing: 12) {
-                Image(systemName: "sidebar.trailing")
-                    .font(.system(size: 28))
-                    .foregroundStyle(.tertiary)
-                Text("Ürün Seçilmedi")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-                Text("Ayrıntıları görmek ve düzenlemek için kenar çubuğundan bir ürün seçin.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
-            }
-            .padding(24)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -1718,32 +1681,10 @@ struct ContentView: View {
         .disabled(isCheckSequenceRunning || !trackedProducts.contains(where: { !$0.isPaused }) || !networkMonitor.canProceedWithChecks)
         .keyboardShortcut("r", modifiers: [.command, .shift])
 
-        Menu {
-            Button("Yedek Dışa Aktar...", systemImage: "square.and.arrow.up") {
-                exportBackup()
-            }
-            .disabled(trackedProducts.isEmpty)
-
-            Button("Yedekten İçe Aktar...", systemImage: "square.and.arrow.down") {
-                importBackup()
-            }
-        } label: {
-            Label("Yedekle / İçe Aktar", systemImage: "externaldrive")
-        }
-        .help("Yedekle veya İçe Aktar")
-
         SettingsLink {
             Label("Ayarlar", systemImage: "gearshape")
         }
         .help("Ayarlar")
-
-        Button {
-            showingInspector.toggle()
-        } label: {
-            Label("Müfettiş", systemImage: "sidebar.trailing")
-        }
-        .help("Müfettiş Paneli (⌥⌘I)")
-        .keyboardShortcut("i", modifiers: [.command, .option])
     }
 
     private func handleAdaptiveMonitoringChanged(_ isEnabled: Bool) {
@@ -4923,160 +4864,6 @@ private struct InAppRestockBannerView: View {
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .shadow(color: .black.opacity(0.12), radius: 6, y: 3)
-    }
-}
-
-private struct ProductInspectorView: View {
-    let product: TrackedProduct
-    let storeName: String
-    let onOpenProduct: () -> Void
-    let onTogglePause: () -> Void
-    let onTogglePriority: () -> Void
-    let onIntervalChange: (Int) -> Void
-    let onGroupChange: (String?) -> Void
-    let onAddTag: (String) -> Void
-    let onRemoveTag: (String) -> Void
-
-    @State private var newTagText = ""
-    @ObservedObject private var orgStore = ProductOrganizationStore.shared
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                // Header
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(product.productName)
-                        .font(.headline)
-                        .lineLimit(2)
-                    Text(storeName)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Divider()
-
-                // Stock & State
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("DURUM")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.secondary)
-
-                    HStack {
-                        Text("Stok Durumu")
-                            .font(.subheadline)
-                        Spacer()
-                        Text(product.stockAvailabilityStatus.label)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(product.stockAvailabilityStatus.color)
-                    }
-
-                    HStack {
-                        Text("Varyant")
-                            .font(.subheadline)
-                        Spacer()
-                        Text(product.selectedVariant.displayDescription)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-
-                    HStack {
-                        Text("Takip Kuralı")
-                            .font(.subheadline)
-                        Spacer()
-                        Text(product.trackingRule.title)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Divider()
-
-                // Monitoring Controls
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("İZLEME AYARLARI")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.secondary)
-
-                    Toggle("Öncelikli Ürün", isOn: Binding(
-                        get: { product.isPriority },
-                        set: { _ in onTogglePriority() }
-                    ))
-                    .font(.subheadline)
-
-                    Toggle("İzlemeyi Duraklat", isOn: Binding(
-                        get: { product.isPaused },
-                        set: { _ in onTogglePause() }
-                    ))
-                    .font(.subheadline)
-
-                    Picker("Kontrol Sıklığı", selection: Binding(
-                        get: { product.checkIntervalMinutes },
-                        set: { onIntervalChange($0) }
-                    )) {
-                        ForEach(ProductCheckInterval.minutes, id: \.self) { minutes in
-                            Text(ProductCheckInterval.title(for: minutes)).tag(minutes)
-                        }
-                    }
-                    .font(.subheadline)
-                }
-
-                Divider()
-
-                // Organization
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("ORGANİZASYON")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.secondary)
-
-                    Picker("Grup", selection: Binding(
-                        get: { product.group ?? "" },
-                        set: { onGroupChange($0.isEmpty ? nil : $0) }
-                    )) {
-                        Text("Grupsuz").tag("")
-                        ForEach(orgStore.availableGroups, id: \.self) { group in
-                            Text(group).tag(group)
-                        }
-                    }
-                    .font(.subheadline)
-
-                    if !product.tags.isEmpty {
-                        TagFlowView(tags: product.tags, onRemove: onRemoveTag)
-                    }
-
-                    HStack {
-                        TextField("Yeni etiket...", text: $newTagText)
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit {
-                                let trimmed = newTagText.trimmingCharacters(in: .whitespacesAndNewlines)
-                                if !trimmed.isEmpty {
-                                    onAddTag(trimmed)
-                                    newTagText = ""
-                                }
-                            }
-                        Button("Ekle") {
-                            let trimmed = newTagText.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if !trimmed.isEmpty {
-                                onAddTag(trimmed)
-                                newTagText = ""
-                            }
-                        }
-                        .disabled(newTagText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-                }
-
-                Divider()
-
-                // Primary Action
-                Button(action: onOpenProduct) {
-                    Label("Ürün Sayfasını Aç", systemImage: "arrow.up.right.square")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-            }
-            .padding(14)
-        }
-        .inspectorColumnWidth(min: 240, ideal: 270, max: 320)
     }
 }
 
