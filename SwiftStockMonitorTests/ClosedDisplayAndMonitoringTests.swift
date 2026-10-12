@@ -174,4 +174,56 @@ final class ClosedDisplayAndMonitoringTests: XCTestCase {
             XCTAssertFalse(mode.description.isEmpty)
         }
     }
+
+    // MARK: - 4. Dynamic Dock & Activation Policy Lifecycle Tests
+
+    func testDynamicActivationPolicyLifecycle() {
+        let windowController = MainWindowController()
+
+        // 1. Initial State: Policy is regular
+        windowController.updateActivationPolicy(.regular)
+        XCTAssertEqual(windowController.currentActivationPolicy, .regular)
+
+        // 2. Hide window: updates activation policy to accessory
+        windowController.hideMainWindow(window: nil)
+        XCTAssertEqual(windowController.currentActivationPolicy, .accessory, "Hiding window must switch to accessory policy (hidden from Dock)")
+
+        // 3. Show window: restores activation policy to regular
+        windowController.showMainWindow()
+        XCTAssertEqual(windowController.currentActivationPolicy, .regular, "Reopening window must restore regular activation policy (visible in Dock)")
+    }
+
+    func testAppDelegateReopenHandlerRestoresMainWindow() {
+        let appDelegate = SwiftStockAppDelegate()
+        MainWindowController.shared.updateActivationPolicy(.accessory)
+        XCTAssertEqual(MainWindowController.shared.currentActivationPolicy, .accessory)
+
+        let handled = appDelegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: false)
+        XCTAssertTrue(handled)
+        XCTAssertEqual(MainWindowController.shared.currentActivationPolicy, .regular, "applicationShouldHandleReopen must restore regular activation policy")
+    }
+
+    func testCloseToHideWindowDelegateInterceptionAndTermination() {
+        let controller = MainWindowController()
+        let delegate = CloseToHideWindowDelegate(forwarding: nil, controller: controller)
+
+        // 1. Normal close: intercepts, hides window, switches policy to accessory, returns false
+        SwiftStockAppDelegate.isTerminating = false
+        controller.updateActivationPolicy(.regular)
+        let dummyWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 200, height: 100),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        let shouldClose = delegate.windowShouldClose(dummyWindow)
+        XCTAssertFalse(shouldClose, "windowShouldClose must return false to preserve background execution")
+        XCTAssertEqual(controller.currentActivationPolicy, .accessory, "Closing window must update policy to accessory")
+
+        // 2. Terminating in progress: allows window to close
+        SwiftStockAppDelegate.isTerminating = true
+        let shouldCloseOnTerminate = delegate.windowShouldClose(dummyWindow)
+        XCTAssertTrue(shouldCloseOnTerminate, "windowShouldClose must return true when app is terminating")
+        SwiftStockAppDelegate.isTerminating = false
+    }
 }

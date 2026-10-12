@@ -226,7 +226,6 @@
 				INFOPLIST_KEY_CFBundleName = StockPing;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "StockPing, stok bildirimlerini e-posta ile iletmek için Mail uygulamasını kullanır.";
 				}; name = Debug; };
 			A80000000000000000000002 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {
@@ -245,7 +244,6 @@
 				INFOPLIST_KEY_CFBundleName = StockPing;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "StockPing, stok bildirimlerini e-posta ile iletmek için Mail uygulamasını kullanır.";
 				}; name = Release; };
 			A70000000000000000000001 /* Build configuration list for PBXNativeTarget */ = {isa = XCConfigurationList; buildConfigurations = (A80000000000000000000001 /* Debug */, A80000000000000000000002 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };

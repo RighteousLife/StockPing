@@ -50,7 +50,7 @@ extension Notification.Name {
 struct SwiftStockMonitorApp: App {
     @NSApplicationDelegateAdaptor private var appDelegate: SwiftStockAppDelegate
     @StateObject private var menuBarState = SwiftStockMenuBarState()
-    @StateObject private var windowController = MainWindowController()
+    @StateObject private var windowController = MainWindowController.shared
 
     var body: some Scene {
         Window("StockPing", id: "main") {
@@ -90,12 +90,19 @@ struct SwiftStockMonitorApp: App {
 }
 
 @MainActor
-private final class SwiftStockAppDelegate: NSObject, NSApplicationDelegate {
+final class SwiftStockAppDelegate: NSObject, NSApplicationDelegate {
     static var isTerminating = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        MainWindowController.shared.updateActivationPolicy(.regular)
         UNUserNotificationCenter.current().delegate = self
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            _ = MainWindowController.shared.showMainWindow()
+        }
+        return true
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -170,9 +177,22 @@ final class SwiftStockMenuBarState: ObservableObject {
 }
 
 @MainActor
-private final class MainWindowController: ObservableObject {
-    private weak var mainWindow: NSWindow?
+final class MainWindowController: ObservableObject {
+    static let shared = MainWindowController()
+    private(set) weak var mainWindow: NSWindow?
     private var closeDelegateProxy: CloseToHideWindowDelegate?
+    @Published private(set) var currentActivationPolicy: NSApplication.ActivationPolicy = .regular
+
+    var isRunningTests: Bool {
+        NSClassFromString("XCTestCase") != nil || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil || ProcessInfo.processInfo.environment["XCTestBundlePath"] != nil
+    }
+
+    func updateActivationPolicy(_ policy: NSApplication.ActivationPolicy) {
+        currentActivationPolicy = policy
+        if !isRunningTests {
+            NSApp.setActivationPolicy(policy)
+        }
+    }
 
     func attach(to window: NSWindow) {
         if mainWindow === window {
@@ -183,7 +203,7 @@ private final class MainWindowController: ObservableObject {
             return
         }
 
-        let proxy = CloseToHideWindowDelegate(forwarding: window.delegate)
+        let proxy = CloseToHideWindowDelegate(forwarding: window.delegate, controller: self)
         closeDelegateProxy = proxy
         mainWindow = window
         window.delegate = proxy
@@ -191,26 +211,46 @@ private final class MainWindowController: ObservableObject {
 
     @discardableResult
     func showMainWindow() -> Bool {
-        guard let mainWindow else { return false }
-        if mainWindow.isMiniaturized {
-            mainWindow.deminiaturize(nil)
+        updateActivationPolicy(.regular)
+        let targetWindow: NSWindow? = {
+            if let mainWindow { return mainWindow }
+            return NSApp.windows.first(where: { $0.canBecomeMain && !($0 is NSPanel) })
+        }()
+
+        guard let targetWindow else { return false }
+        if targetWindow.isMiniaturized {
+            targetWindow.deminiaturize(nil)
         }
-        mainWindow.makeKeyAndOrderFront(nil)
+        targetWindow.orderFront(nil)
+        targetWindow.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
         return true
     }
+
+    func hideMainWindow(window: NSWindow? = nil) {
+        let target = window ?? mainWindow
+        target?.orderOut(nil)
+        updateActivationPolicy(.accessory)
+    }
 }
 
-private final class CloseToHideWindowDelegate: NSObject, NSWindowDelegate {
+@MainActor
+final class CloseToHideWindowDelegate: NSObject, NSWindowDelegate {
     private weak var downstreamDelegate: (any NSWindowDelegate)?
+    private weak var controller: MainWindowController?
 
-    init(forwarding delegate: (any NSWindowDelegate)?) {
-        downstreamDelegate = delegate
+    init(forwarding delegate: (any NSWindowDelegate)?, controller: MainWindowController? = nil) {
+        self.downstreamDelegate = delegate
+        self.controller = controller
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard !SwiftStockAppDelegate.isTerminating else { return true }
-        sender.orderOut(nil)
+        if let controller {
+            controller.hideMainWindow(window: sender)
+        } else {
+            MainWindowController.shared.hideMainWindow(window: sender)
+        }
         return false
     }
 
