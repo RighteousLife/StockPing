@@ -1010,6 +1010,20 @@ struct TrackedProduct: Identifiable {
         return .unchecked
     }
 
+    var stockAvailabilityStatus: ProductStatus {
+        if effectiveAvailability == true { return .inStock }
+        if effectiveAvailability == false { return .outOfStock }
+        return .unchecked
+    }
+
+    var hasCheckFailure: Bool {
+        lastCheckError != nil || consecutiveFailureChecks > 0
+    }
+
+    var lastSuccessfulCheckDate: Date? {
+        latestDiagnostic?.lastSuccessfulCheckDate ?? (lastCheckError == nil ? lastChecked : nil)
+    }
+
     var reliability: ProductReliability {
         ProductReliability.calculate(for: self)
     }

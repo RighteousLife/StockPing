@@ -109,6 +109,10 @@ extension StoreChecker {
 
 @MainActor
 enum StoreCheckerRouter {
+    static func canHandle(_ url: URL) -> Bool {
+        checker(for: url) != nil
+    }
+
     static func provider(for url: URL) -> StoreProvider? {
         checker(for: url)?.provider
     }
