@@ -86,7 +86,6 @@ struct SwiftStockMonitorApp: App {
 
         Settings {
             SettingsView()
-                .frame(width: 480, height: 540)
         }
     }
 }
@@ -5500,6 +5499,18 @@ private final class StockNotificationManager {
     }
 }
 
+private extension View {
+    /// Consistent layout for every Settings tab form.
+    func settingsFormLayout() -> some View {
+        self
+            .formStyle(.grouped)
+            .contentMargins(.horizontal, 20, for: .scrollContent)
+            .contentMargins(.top, 6, for: .scrollContent)
+            .contentMargins(.bottom, 12, for: .scrollContent)
+            .scrollBounceBehavior(.basedOnSize)
+    }
+}
+
 private struct SettingsView: View {
     @AppStorage("automaticCheckingEnabled") private var automaticCheckingEnabled = true
     @AppStorage("checkIntervalMinutes") private var checkIntervalMinutes = 1
@@ -5546,7 +5557,7 @@ private struct SettingsView: View {
             advancedTab
                 .tabItem { Label("Gelişmiş", systemImage: "wrench.and.screwdriver") }
         }
-        .frame(width: 540, height: 440)
+        .frame(width: 540, height: 490)
         .onAppear {
             synchronizeLaunchAtLoginPreference()
             closedDisplayManager.checkAuthorization()
@@ -5573,6 +5584,11 @@ private struct SettingsView: View {
                         Text(ProductCheckInterval.title(for: minutes)).tag(minutes)
                     }
                 }
+
+                Text("Kontroller, StockPing çalıştığı sürece arka planda gerçekleştirilir.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Başlangıç") {
@@ -5591,14 +5607,8 @@ private struct SettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-
-            Section {
-                Text("Kontroller, StockPing çalıştığı sürece arka planda gerçekleştirilir.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
         }
-        .formStyle(.grouped)
+        .settingsFormLayout()
     }
 
     private var monitoringTab: some View {
@@ -5608,6 +5618,7 @@ private struct SettingsView: View {
                 Text("Uzun süre değişiklik olmadığında kontrol sıklığını otomatik olarak azaltır ve mağaza sunucularına gereksiz istekleri sınırlar.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Zamanlanmış İzleme") {
@@ -5641,6 +5652,7 @@ private struct SettingsView: View {
                     Text("Otomatik kontroller yalnızca belirlenen saatler arasında çalışır. Manuel kontroller her zaman yapılabilir.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -5653,6 +5665,7 @@ private struct SettingsView: View {
                 Text(globalVerificationMode.description)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 Divider()
 
@@ -5660,6 +5673,7 @@ private struct SettingsView: View {
                 Text("Stok tespit edildiğinde geçici olarak yüksek frekanslı izleme yaparak stoğun stabilitesini takip eder.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 if restockBurstModeEnabled {
                     Picker("Burst kontrol sıklığı", selection: $restockBurstIntervalMinutes) {
@@ -5676,7 +5690,7 @@ private struct SettingsView: View {
                 }
             }
         }
-        .formStyle(.grouped)
+        .settingsFormLayout()
     }
 
     private var notificationsTab: some View {
@@ -5686,6 +5700,7 @@ private struct SettingsView: View {
                 Text("Stok durumu değiştiğinde sistem bildirimi ve sesli uyarı verir.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("E-posta Bildirimi") {
@@ -5693,6 +5708,7 @@ private struct SettingsView: View {
                 Text("Ürün tekrar stokta olduğunda macOS Mail üzerinden e-posta gönderir.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 if emailNotificationsEnabled {
                     Button {
@@ -5724,9 +5740,10 @@ private struct SettingsView: View {
                 Text("Ürün stoğa girdiğinde ürün sayfasını varsayılan web tarayıcınızda otomatik olarak açar (Doğrulama etkinse onay sonrasında açılır).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .formStyle(.grouped)
+        .settingsFormLayout()
     }
 
     private var powerTab: some View {
@@ -5742,6 +5759,7 @@ private struct SettingsView: View {
                 Text(monitoringPowerMode.description)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Kapak Kapalı Takip Modu (Closed-Display)") {
@@ -5749,6 +5767,7 @@ private struct SettingsView: View {
                 Text("Apple Silicon Mac'lerde ekran kapağı kapatıldığında dahili ekran kapanır, Mac uykuya geçmez ve arka plan stok kontrolleri kesintisiz devam eder.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 if closedDisplayMonitoringEnabled {
                     VStack(alignment: .leading, spacing: 10) {
@@ -5780,6 +5799,7 @@ private struct SettingsView: View {
                             Text("Kapak kapalı modun macOS tarafından engellenmemesi için sistem 'pmset disablesleep' komutu için tek seferlik yönetici izni gerektirir.")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
                         } else {
                             HStack(spacing: 12) {
                                 Button("Yetkiyi Test Et") {
@@ -5810,6 +5830,7 @@ private struct SettingsView: View {
                             Text(helperActionMessage)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
 
                         Divider()
@@ -5832,12 +5853,13 @@ private struct SettingsView: View {
                         Text("Pil bu seviyenin altına düştüğünde veya pil gücündeyken (ayar seçildiyse) kapak kapalı takip modu otomatik olarak durdurulur.")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(.top, 4)
                 }
             }
         }
-        .formStyle(.grouped)
+        .settingsFormLayout()
     }
 
     private var storesTab: some View {
@@ -5853,6 +5875,7 @@ private struct SettingsView: View {
                         Spacer()
                         Text("\(summary.productCount) ürün")
                             .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                         Text("(\(summary.health.title))")
                             .foregroundStyle(summary.health.color)
                             .font(.caption)
@@ -5860,7 +5883,7 @@ private struct SettingsView: View {
                 }
             }
         }
-        .formStyle(.grouped)
+        .settingsFormLayout()
     }
 
     private var advancedTab: some View {
@@ -5886,6 +5909,7 @@ private struct SettingsView: View {
                 Text("Tüm takip edilen ürünleri, akıllı takip kurallarını ve ayarları JSON formatında yedekleyin veya geri yükleyin.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Sıfırlama") {
@@ -5895,9 +5919,10 @@ private struct SettingsView: View {
                 Text("StockPing ayarlarını varsayılan fabrika değerlerine döndürür. Takip edilen ürünleriniz silinmez.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .formStyle(.grouped)
+        .settingsFormLayout()
     }
 
     private func synchronizeLaunchAtLoginPreference() {
