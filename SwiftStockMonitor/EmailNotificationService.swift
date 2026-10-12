@@ -49,7 +49,7 @@ final class EmailNotificationService: ObservableObject {
 
     private init() {}
 
-    func sendRestockNotification(for product: TrackedProduct) {
+    func sendRestockNotification(for product: TrackedProduct, customVariantText: String? = nil) {
         let store: String
         switch product.provider {
         case .zara: store = "Zara Türkiye"
@@ -65,21 +65,22 @@ final class EmailNotificationService: ObservableObject {
         timeFormatter.timeStyle = .short
         let timeString = timeFormatter.string(from: Date())
 
+        let variantTextToDisplay = customVariantText ?? product.variantTitle
         var bodyLines = [
             "StockPing bir ürünün tekrar stokta olduğunu tespit etti.",
             "",
             "Ürün: \(product.productName)",
             "Mağaza: \(store)"
         ]
-        if !product.variantTitle.isEmpty && product.variantTitle != "Default Title" {
-            bodyLines.append("Varyant: \(product.variantTitle)")
+        if !variantTextToDisplay.isEmpty && variantTextToDisplay != "Default Title" {
+            bodyLines.append("Varyant: \(variantTextToDisplay)")
         }
         bodyLines.append("Kontrol zamanı: \(timeString)")
         bodyLines.append("")
         bodyLines.append("Ürün bağlantısı:")
         bodyLines.append(product.productURL.absoluteString)
 
-        let subject = "StockPing — Ürün Stokta!"
+        let subject = "StockPing — \(product.productName) (\(variantTextToDisplay)) Stokta!"
         let content = bodyLines.joined(separator: "\n")
 
         pendingEmails.append(PendingEmail(

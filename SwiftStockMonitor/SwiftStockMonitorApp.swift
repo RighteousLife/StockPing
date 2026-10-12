@@ -7,7 +7,7 @@ import Combine
 import Network
 
 private enum ProductListFilter: String, CaseIterable, Identifiable {
-    case all, inStock, outOfStock, checking, error, paused, priority, noGroup
+    case all, inStock, outOfStock, checking, error, paused, priority, burst, recentRestock, noGroup
 
     var id: Self { self }
 
@@ -20,6 +20,8 @@ private enum ProductListFilter: String, CaseIterable, Identifiable {
         case .error: "Kontrol sorunu"
         case .paused: "Duraklatıldı"
         case .priority: "Öncelikli"
+        case .burst: "Burst modunda"
+        case .recentRestock: "Yakın zamanda restock"
         case .noGroup: "Grupsuz"
         }
     }
@@ -590,6 +592,10 @@ struct ContentView: View {
     @AppStorage("closedDisplayMonitoringEnabled") private var closedDisplayMonitoringEnabled = false
     @AppStorage("closedDisplayRequireACPower") private var closedDisplayRequireACPower = true
     @AppStorage("closedDisplayMinBatteryLevel") private var closedDisplayMinBatteryLevel = 20
+    @AppStorage("restockVerificationMode") private var globalVerificationMode: RestockVerificationMode = .off
+    @AppStorage("restockBurstModeEnabled") private var restockBurstModeEnabled = true
+    @AppStorage("restockBurstIntervalMinutes") private var restockBurstIntervalMinutes = 2
+    @AppStorage("restockBurstDurationMinutes") private var restockBurstDurationMinutes = 30
 
     private var currentMonitoringSchedule: MonitoringSchedule {
         let weekdayInts = monitoringScheduleWeekdays
@@ -707,6 +713,10 @@ struct ContentView: View {
             case .error: matchesStatus = status == .error
             case .paused: matchesStatus = status == .paused
             case .priority: matchesStatus = product.isPriority
+            case .burst: matchesStatus = product.isBurstActive
+            case .recentRestock:
+                let cutoff = Date().addingTimeInterval(-24 * 3600)
+                matchesStatus = product.events.contains { $0.type == .stockArrived && $0.date >= cutoff }
             case .noGroup: matchesStatus = (product.group == nil || product.group?.isEmpty == true)
             }
 
@@ -1130,7 +1140,11 @@ struct ContentView: View {
                             onToggleMacOSNotification: { toggleMacOSNotification(for: trackedProducts[selectedProductIndex].id) },
                             onToggleEmailNotification: { toggleEmailNotification(for: trackedProducts[selectedProductIndex].id) },
                             onNotificationProfileChange: { updateNotificationProfile($0, for: trackedProducts[selectedProductIndex].id) },
-                            onAutoOpenChange: { updateAutoOpenOnRestock($0, for: trackedProducts[selectedProductIndex].id) }
+                            onAutoOpenChange: { updateAutoOpenOnRestock($0, for: trackedProducts[selectedProductIndex].id) },
+                            onTrackingRuleChange: { updateTrackingRule($0, for: trackedProducts[selectedProductIndex].id) },
+                            onAlertConditionChange: { updateAlertCondition($0, for: trackedProducts[selectedProductIndex].id) },
+                            onVerificationPreferenceChange: { updateVerificationPreference($0, for: trackedProducts[selectedProductIndex].id) },
+                            onBurstPreferenceChange: { updateBurstPreference($0, for: trackedProducts[selectedProductIndex].id) }
                         )
                     } else if trackedProducts.isEmpty {
                         EmptyProductsView {
@@ -1270,6 +1284,10 @@ struct ContentView: View {
                     emailNotificationsEnabled: emailNotificationsEnabled,
                     adaptiveMonitoringEnabled: adaptiveMonitoringEnabled,
                     autoOpenOnRestockEnabled: autoOpenOnRestockEnabled,
+                    verificationMode: globalVerificationMode,
+                    burstModeEnabled: restockBurstModeEnabled,
+                    burstIntervalMinutes: restockBurstIntervalMinutes,
+                    burstDurationMinutes: restockBurstDurationMinutes,
                     onCheckComplete: completeCurrentCheck
                 )
                 .frame(
@@ -1791,6 +1809,30 @@ struct ContentView: View {
         TrackedProductStore.save(trackedProducts)
     }
 
+    private func updateTrackingRule(_ rule: SmartTrackingRule, for productID: UUID) {
+        guard let index = trackedProducts.firstIndex(where: { $0.id == productID }) else { return }
+        trackedProducts[index].trackingRule = rule
+        TrackedProductStore.save(trackedProducts)
+    }
+
+    private func updateAlertCondition(_ condition: SmartAlertCondition, for productID: UUID) {
+        guard let index = trackedProducts.firstIndex(where: { $0.id == productID }) else { return }
+        trackedProducts[index].alertCondition = condition
+        TrackedProductStore.save(trackedProducts)
+    }
+
+    private func updateVerificationPreference(_ pref: RestockVerificationMode?, for productID: UUID) {
+        guard let index = trackedProducts.firstIndex(where: { $0.id == productID }) else { return }
+        trackedProducts[index].verificationPreference = pref
+        TrackedProductStore.save(trackedProducts)
+    }
+
+    private func updateBurstPreference(_ pref: Bool?, for productID: UUID) {
+        guard let index = trackedProducts.firstIndex(where: { $0.id == productID }) else { return }
+        trackedProducts[index].burstPreference = pref
+        TrackedProductStore.save(trackedProducts)
+    }
+
     private func updateCheckInterval(_ minutes: Int, for productID: UUID) {
         guard let index = trackedProducts.firstIndex(where: { $0.id == productID }) else { return }
         trackedProducts[index].checkIntervalMinutes = minutes
@@ -1803,7 +1845,9 @@ struct ContentView: View {
             status: trackedProducts[index].status,
             consecutiveUnchangedChecks: trackedProducts[index].consecutiveUnchangedChecks,
             consecutiveFailureChecks: trackedProducts[index].consecutiveFailureChecks,
-            isEnabled: adaptiveMonitoringEnabled
+            isEnabled: adaptiveMonitoringEnabled,
+            burstExpiresAt: trackedProducts[index].burstExpiresAt,
+            burstIntervalMinutes: restockBurstIntervalMinutes
         )
         trackedProducts[index].nextCheckDate = trackedProducts[index].lastChecked?
             .addingTimeInterval(TimeInterval(effectiveMinutes * 60)) ?? Date()
@@ -1890,6 +1934,24 @@ private struct ProductSidebarRow: View {
                             .font(.system(size: 10, weight: .bold))
                             .foregroundStyle(.yellow)
                     }
+                    if product.trackingRule != .exactVariant {
+                        Image(systemName: product.trackingRule.symbol)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Color.accentColor)
+                            .help(product.trackingRule.title)
+                    }
+                    if product.isBurstActive {
+                        HStack(spacing: 2) {
+                            Image(systemName: "bolt.fill")
+                            Text("BURST")
+                        }
+                        .font(.system(size: 8, weight: .bold))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color.orange.opacity(0.18))
+                        .foregroundStyle(Color.orange)
+                        .clipShape(Capsule())
+                    }
                 }
                 HStack(spacing: 4) {
                     if let group = product.group, !group.isEmpty {
@@ -1909,6 +1971,32 @@ private struct ProductSidebarRow: View {
                         .fixedSize(horizontal: true, vertical: false)
                 }
                 .font(.caption)
+                .foregroundStyle(.secondary)
+
+                HStack(spacing: 4) {
+                    if let lastChecked = product.lastChecked {
+                        Text("Son: \(TurkishRelativeTime.string(from: lastChecked))")
+                    } else {
+                        Text("Henüz kontrol edilmedi")
+                    }
+                    if let nextCheck = product.nextCheckDate, !product.isPaused {
+                        Text("·")
+                            .foregroundStyle(.tertiary)
+                        Text("Sonraki: \(TurkishRelativeTime.string(from: nextCheck))")
+                    }
+                    if product.reliability.level != .unknown {
+                        Text("·")
+                            .foregroundStyle(.tertiary)
+                        HStack(spacing: 2) {
+                            Circle()
+                                .fill(product.reliability.level.color)
+                                .frame(width: 5, height: 5)
+                            Text(product.reliability.level.displayName)
+                        }
+                        .foregroundStyle(product.reliability.level.color)
+                    }
+                }
+                .font(.system(size: 10))
                 .foregroundStyle(.secondary)
             }
         }
@@ -2045,6 +2133,10 @@ private struct ProductDetailView: View {
     let onToggleEmailNotification: () -> Void
     let onNotificationProfileChange: (NotificationProfile) -> Void
     let onAutoOpenChange: (Bool?) -> Void
+    let onTrackingRuleChange: (SmartTrackingRule) -> Void
+    let onAlertConditionChange: (SmartAlertCondition) -> Void
+    let onVerificationPreferenceChange: (RestockVerificationMode?) -> Void
+    let onBurstPreferenceChange: (Bool?) -> Void
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { timeline in
@@ -2135,6 +2227,31 @@ private struct ProductDetailView: View {
                         .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
                     }
 
+                    if product.isBurstActive {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "bolt.fill")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.orange)
+                                .frame(width: 16, height: 16)
+                                .padding(.top, 1)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Restock Burst Modu Etkin")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                if let expires = product.burstExpiresAt {
+                                    Text("Yeni stok tespiti sonrası yüksek frekanslı izleme devrede (Kalan süre: \(TurkishRelativeTime.string(from: expires))).")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 6))
+                    }
+
                     Divider()
 
                     // 1. Temel Bilgiler Kartı
@@ -2143,13 +2260,16 @@ private struct ProductDetailView: View {
                     // 2. Gruplanmış Nitelikler (Renk, Beden, SKU, Referans)
                     groupedAttributesCard
 
-                    // 3. Kontrol Güvenilirliği
+                    // 3. Akıllı Takip ve Alarm Kuralı
+                    smartTrackingCard
+
+                    // 4. Kontrol Güvenilirliği
                     reliabilitySummaryCard
 
-                    // 4. Bildirim ve Otomasyon
+                    // 5. Bildirim ve Otomasyon
                     notificationAndAutomationCard
 
-                    // 5. Organizasyon ve Notlar
+                    // 6. Organizasyon ve Notlar
                     organizationAndNotesCard
 
                     Divider()
@@ -2475,6 +2595,119 @@ private struct ProductDetailView: View {
         .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
     }
 
+    private var smartTrackingCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Akıllı Takip ve Alarm Kuralı")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Spacer()
+                Image(systemName: product.trackingRule.symbol)
+                    .foregroundStyle(Color.accentColor)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                detailLabel("Takip Modu")
+                Picker("Takip Modu", selection: Binding(
+                    get: { product.trackingRule },
+                    set: { onTrackingRuleChange($0) }
+                )) {
+                    ForEach(SmartTrackingRule.allCases) { rule in
+                        Label(rule.title, systemImage: rule.symbol).tag(rule)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+
+                Text(product.trackingRule.preview(color: product.selectedColorName, size: product.selectedSizeName))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                detailLabel("Alarm Koşulu")
+                Picker("Alarm Koşulu", selection: Binding(
+                    get: {
+                        switch product.alertCondition {
+                        case .anyMatching: return 0
+                        case .minimumCount: return 1
+                        }
+                    },
+                    set: { choice in
+                        if choice == 0 {
+                            onAlertConditionChange(.anyMatching)
+                        } else {
+                            onAlertConditionChange(.minimumCount(2))
+                        }
+                    }
+                )) {
+                    Text("Herhangi bir eşleşen varyant stokta olduğunda").tag(0)
+                    Text("En az belirli sayıda varyant stokta olduğunda").tag(1)
+                }
+                .labelsHidden()
+                .pickerStyle(.radioGroup)
+
+                if case .minimumCount(let count) = product.alertCondition {
+                    HStack(spacing: 8) {
+                        Text("Gereken minimum varyant adedi:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Picker("", selection: Binding(
+                            get: { count },
+                            set: { onAlertConditionChange(.minimumCount($0)) }
+                        )) {
+                            ForEach(2...10, id: \.self) { n in
+                                Text("\(n) varyant").tag(n)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 110)
+                    }
+                    .padding(.top, 2)
+                }
+            }
+
+            Divider()
+
+            Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 10) {
+                GridRow {
+                    detailLabel("Restock Doğrulama")
+                    Picker("Doğrulama", selection: Binding(
+                        get: { product.verificationPreference },
+                        set: { onVerificationPreferenceChange($0) }
+                    )) {
+                        Text("Varsayılan (Genel Ayar)").tag(nil as RestockVerificationMode?)
+                        Text("Kapalı (Anında Bildir)").tag(RestockVerificationMode.off as RestockVerificationMode?)
+                        Text("1 kez onayla").tag(RestockVerificationMode.oneConfirmation as RestockVerificationMode?)
+                        Text("2 kez onayla").tag(RestockVerificationMode.twoConfirmations as RestockVerificationMode?)
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 200)
+                }
+
+                GridRow {
+                    detailLabel("Restock Burst Modu")
+                    Picker("Burst", selection: Binding(
+                        get: { product.burstPreference },
+                        set: { onBurstPreferenceChange($0) }
+                    )) {
+                        Text("Varsayılan (Genel Ayar)").tag(nil as Bool?)
+                        Text("Etkin").tag(true as Bool?)
+                        Text("Devre Dışı").tag(false as Bool?)
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 200)
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+    }
+
     private var checkMethodDescription: String {
         switch product.provider {
         case .shopify: "Shopify Ürün API (/products.js)"
@@ -2503,6 +2736,12 @@ private struct ProductDetailView: View {
 
     private var reliabilitySummaryCard: some View {
         let rel = product.reliability
+        let past24h = Date().addingTimeInterval(-24 * 3600)
+        let events24h = product.events.filter { $0.date >= past24h }
+        let checkFailures24h = events24h.filter { $0.type == .checkFailed }.count
+        let stockArrivals24h = events24h.filter { $0.type == .stockArrived }.count
+        let stockDepletions24h = events24h.filter { $0.type == .stockDepleted }.count
+
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Kontrol Güvenilirliği")
@@ -2512,8 +2751,9 @@ private struct ProductDetailView: View {
                 Spacer()
 
                 HStack(spacing: 5) {
-                    Image(systemName: reliabilitySymbol(for: rel.level))
-                        .foregroundStyle(reliabilityColor(for: rel.level))
+                    Circle()
+                        .fill(reliabilityColor(for: rel.level))
+                        .frame(width: 8, height: 8)
                     Text(rel.level.displayName)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(reliabilityColor(for: rel.level))
@@ -2543,17 +2783,53 @@ private struct ProductDetailView: View {
                     }
                 }
 
+                if let errorMsg = product.lastCheckError ?? (product.status == .error ? product.latestDiagnostic?.userMessage : nil) {
+                    GridRow(alignment: .top) {
+                        detailLabel("Son Hata")
+                        Text(errorMsg)
+                            .font(.callout)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                GridRow {
+                    detailLabel("Son 24 Saat")
+                    if events24h.isEmpty {
+                        Text("Kayıtlı olay yok (kontroller stabil)")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        HStack(spacing: 6) {
+                            if checkFailures24h > 0 {
+                                Text("\(checkFailures24h) hata kaydı")
+                                    .foregroundStyle(.orange)
+                            } else {
+                                Text("0 hata")
+                                    .foregroundStyle(.green)
+                            }
+                            Text("·")
+                                .foregroundStyle(.tertiary)
+                            Text("\(stockArrivals24h + stockDepletions24h) stok değişimi")
+                                .foregroundStyle(.secondary)
+                        }
+                        .font(.callout)
+                    }
+                }
+
                 GridRow {
                     detailLabel("Ardışık Değişmeyen")
                     Text("\(product.consecutiveUnchangedChecks) kontrol")
                         .font(.callout)
                 }
 
-                GridRow {
-                    detailLabel("Ardışık Hatalar")
-                    Text("\(product.consecutiveFailureChecks)")
-                        .font(.callout)
-                        .foregroundStyle(product.consecutiveFailureChecks > 0 ? Color.orange : Color.primary)
+                if product.consecutiveFailureChecks > 0 {
+                    GridRow {
+                        detailLabel("Ardışık Hatalar")
+                        Text("\(product.consecutiveFailureChecks)")
+                            .font(.callout)
+                            .foregroundStyle(.orange)
+                    }
                 }
 
                 GridRow(alignment: .top) {
@@ -4303,6 +4579,10 @@ private struct StorePageWebView: NSViewRepresentable {
     let emailNotificationsEnabled: Bool
     let adaptiveMonitoringEnabled: Bool
     let autoOpenOnRestockEnabled: Bool
+    var verificationMode: RestockVerificationMode = .off
+    var burstModeEnabled: Bool = true
+    var burstIntervalMinutes: Int = 2
+    var burstDurationMinutes: Int = 30
     let onCheckComplete: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -4316,6 +4596,10 @@ private struct StorePageWebView: NSViewRepresentable {
             emailNotificationsEnabled: emailNotificationsEnabled,
             adaptiveMonitoringEnabled: adaptiveMonitoringEnabled,
             autoOpenOnRestockEnabled: autoOpenOnRestockEnabled,
+            verificationMode: verificationMode,
+            burstModeEnabled: burstModeEnabled,
+            burstIntervalMinutes: burstIntervalMinutes,
+            burstDurationMinutes: burstDurationMinutes,
             onCheckComplete: onCheckComplete
         )
     }
@@ -4335,7 +4619,11 @@ private struct StorePageWebView: NSViewRepresentable {
             notificationsEnabled: notificationsEnabled,
             emailNotificationsEnabled: emailNotificationsEnabled,
             adaptiveMonitoringEnabled: adaptiveMonitoringEnabled,
-            autoOpenOnRestockEnabled: autoOpenOnRestockEnabled
+            autoOpenOnRestockEnabled: autoOpenOnRestockEnabled,
+            verificationMode: verificationMode,
+            burstModeEnabled: burstModeEnabled,
+            burstIntervalMinutes: burstIntervalMinutes,
+            burstDurationMinutes: burstDurationMinutes
         )
     }
 
@@ -4349,6 +4637,10 @@ private struct StorePageWebView: NSViewRepresentable {
         private var emailNotificationsEnabled: Bool
         private var adaptiveMonitoringEnabled: Bool
         private var autoOpenOnRestockEnabled: Bool
+        private var verificationMode: RestockVerificationMode
+        private var burstModeEnabled: Bool
+        private var burstIntervalMinutes: Int
+        private var burstDurationMinutes: Int
         private let onCheckComplete: () -> Void
         private var loadedProductID: UUID
         private var pageIsReady = false
@@ -4373,6 +4665,10 @@ private struct StorePageWebView: NSViewRepresentable {
             emailNotificationsEnabled: Bool,
             adaptiveMonitoringEnabled: Bool,
             autoOpenOnRestockEnabled: Bool,
+            verificationMode: RestockVerificationMode = .off,
+            burstModeEnabled: Bool = true,
+            burstIntervalMinutes: Int = 2,
+            burstDurationMinutes: Int = 30,
             onCheckComplete: @escaping () -> Void
         ) {
             self.product = product
@@ -4384,6 +4680,10 @@ private struct StorePageWebView: NSViewRepresentable {
             self.emailNotificationsEnabled = emailNotificationsEnabled
             self.adaptiveMonitoringEnabled = adaptiveMonitoringEnabled
             self.autoOpenOnRestockEnabled = autoOpenOnRestockEnabled
+            self.verificationMode = verificationMode
+            self.burstModeEnabled = burstModeEnabled
+            self.burstIntervalMinutes = burstIntervalMinutes
+            self.burstDurationMinutes = burstDurationMinutes
             self.onCheckComplete = onCheckComplete
             self.loadedProductID = product.wrappedValue.id
         }
@@ -4395,13 +4695,21 @@ private struct StorePageWebView: NSViewRepresentable {
             notificationsEnabled: Bool,
             emailNotificationsEnabled: Bool,
             adaptiveMonitoringEnabled: Bool,
-            autoOpenOnRestockEnabled: Bool
+            autoOpenOnRestockEnabled: Bool,
+            verificationMode: RestockVerificationMode = .off,
+            burstModeEnabled: Bool = true,
+            burstIntervalMinutes: Int = 2,
+            burstDurationMinutes: Int = 30
         ) {
             self.product = product
             self.notificationsEnabled = notificationsEnabled
             self.emailNotificationsEnabled = emailNotificationsEnabled
             self.adaptiveMonitoringEnabled = adaptiveMonitoringEnabled
             self.autoOpenOnRestockEnabled = autoOpenOnRestockEnabled
+            self.verificationMode = verificationMode
+            self.burstModeEnabled = burstModeEnabled
+            self.burstIntervalMinutes = burstIntervalMinutes
+            self.burstDurationMinutes = burstDurationMinutes
             let currentProduct = product.wrappedValue
             if currentProduct.id != loadedProductID {
                 loadedProductID = currentProduct.id
@@ -4574,37 +4882,87 @@ private struct StorePageWebView: NSViewRepresentable {
             providerCheckTask = Task { [self] in
                 do {
                     let outcome = try await StoreCheckerRouter.checkWithVariants(in: webView, product: product, activePageURL: webView.url)
-                    let available = outcome.isAvailable
+                    let exactAvailable = outcome.isAvailable
                     guard self.activeProviderCheckRequestID == requestID,
                           self.product.wrappedValue.id == product.id else { return }
+
+                    let eval = self.product.wrappedValue.evaluateLogicalStock(snapshots: outcome.variants)
+                    let logicalAvailable = eval.isAvailable
                     let wasInError = self.product.wrappedValue.lastCheckError != nil
-                    let previousAvailability = self.product.wrappedValue.lastKnownAvailable
+                    let previousLogicalAvailability = self.product.wrappedValue.effectiveAvailability
+
                     let transition = Self.transition(
-                        from: previousAvailability,
-                        to: available
+                        from: previousLogicalAvailability,
+                        to: logicalAvailable
                     )
+
                     if wasInError {
-                        self.product.wrappedValue.record(.checkRecovered, previousState: previousAvailability, newState: available)
+                        self.product.wrappedValue.record(.checkRecovered, previousState: previousLogicalAvailability, newState: logicalAvailable)
                     }
                     self.product.wrappedValue.consecutiveFailureChecks = 0
+
+                    let effectiveVerificationMode = self.product.wrappedValue.verificationPreference ?? self.verificationMode
+                    let requiredConfirmations = effectiveVerificationMode.requiredConfirmations
+                    var isConfirmedRestock = false
+
                     switch transition {
                     case .restocked:
-                        self.product.wrappedValue.consecutiveUnchangedChecks = 0
-                        self.product.wrappedValue.record(.stockArrived, previousState: false, newState: true)
+                        if requiredConfirmations > 0 {
+                            self.product.wrappedValue.pendingVerificationCount += 1
+                            if self.product.wrappedValue.pendingVerificationCount > requiredConfirmations {
+                                isConfirmedRestock = true
+                                self.product.wrappedValue.pendingVerificationCount = 0
+                                self.product.wrappedValue.consecutiveUnchangedChecks = 0
+                                self.product.wrappedValue.record(.stockArrived, previousState: false, newState: true)
+                            } else {
+                                self.product.wrappedValue.consecutiveUnchangedChecks = 0
+                            }
+                        } else {
+                            isConfirmedRestock = true
+                            self.product.wrappedValue.pendingVerificationCount = 0
+                            self.product.wrappedValue.consecutiveUnchangedChecks = 0
+                            self.product.wrappedValue.record(.stockArrived, previousState: false, newState: true)
+                        }
+
                     case .wentOutOfStock:
+                        self.product.wrappedValue.pendingVerificationCount = 0
+                        self.product.wrappedValue.burstExpiresAt = nil
                         self.product.wrappedValue.consecutiveUnchangedChecks = 0
                         self.product.wrappedValue.record(.stockDepleted, previousState: true, newState: false)
+
                     case .unchanged(available: false):
+                        self.product.wrappedValue.pendingVerificationCount = 0
                         self.product.wrappedValue.consecutiveUnchangedChecks += 1
+
                     case .unchanged(available: true):
-                        self.product.wrappedValue.consecutiveUnchangedChecks = 0
+                        if self.product.wrappedValue.pendingVerificationCount > 0 && requiredConfirmations > 0 {
+                            self.product.wrappedValue.pendingVerificationCount += 1
+                            if self.product.wrappedValue.pendingVerificationCount > requiredConfirmations {
+                                isConfirmedRestock = true
+                                self.product.wrappedValue.pendingVerificationCount = 0
+                                self.product.wrappedValue.consecutiveUnchangedChecks = 0
+                                self.product.wrappedValue.record(.stockArrived, previousState: false, newState: true)
+                            }
+                        } else {
+                            self.product.wrappedValue.consecutiveUnchangedChecks = 0
+                        }
+
                     case .initial:
+                        self.product.wrappedValue.pendingVerificationCount = 0
                         self.product.wrappedValue.consecutiveUnchangedChecks = 0
                     }
-                    self.product.wrappedValue.lastAvailabilityTransition = transition
-                    self.product.wrappedValue.selectedVariant.availability = available
+
+                    self.product.wrappedValue.lastAvailabilityTransition = isConfirmedRestock ? .restocked : transition
+                    self.product.wrappedValue.selectedVariant.availability = exactAvailable
+                    self.product.wrappedValue.logicalAvailability = logicalAvailable
                     self.product.wrappedValue.variantSnapshots = outcome.variants
                     self.product.wrappedValue.lastCheckError = nil
+
+                    if isConfirmedRestock {
+                        if self.burstModeEnabled && self.product.wrappedValue.burstPreference != false {
+                            self.product.wrappedValue.burstExpiresAt = Date().addingTimeInterval(TimeInterval(self.burstDurationMinutes * 60))
+                        }
+                    }
 
                     let now = Date()
                     let startTime = self.checkStartTime ?? now
@@ -4616,13 +4974,12 @@ private struct StorePageWebView: NSViewRepresentable {
                     case .recovering: netStatus = "Yeniden bağlanıyor"
                     }
                     let userMsg: String
-                    switch transition {
-                    case .restocked:
+                    if isConfirmedRestock {
                         userMsg = "Stok kontrolü başarılı. Yeni stok geldiği tespit edildi."
-                    case .wentOutOfStock:
+                    } else if transition == .wentOutOfStock {
                         userMsg = "Stok kontrolü başarılı. Stoğun tükendiği tespit edildi."
-                    default:
-                        userMsg = "Stok kontrolü başarıyla tamamlandı. Ürün \(available ? "stokta" : "stokta değil")."
+                    } else {
+                        userMsg = "Stok kontrolü başarıyla tamamlandı. Ürün \(logicalAvailable ? "stokta" : "stokta değil")."
                     }
                     self.product.wrappedValue.latestDiagnostic = ProviderDiagnostic(
                         providerName: self.product.wrappedValue.providerDisplayName,
@@ -4630,8 +4987,8 @@ private struct StorePageWebView: NSViewRepresentable {
                         startedAt: startTime,
                         completedAt: now,
                         durationSeconds: duration,
-                        outcome: (transition == .restocked || transition == .wentOutOfStock) ? .stockChanged : .success,
-                        stockResult: available,
+                        outcome: (isConfirmedRestock || transition == .wentOutOfStock) ? .stockChanged : .success,
+                        stockResult: logicalAvailable,
                         networkStatus: netStatus,
                         errorCategory: "Yok",
                         userMessage: userMsg,
@@ -4639,15 +4996,18 @@ private struct StorePageWebView: NSViewRepresentable {
                         lastSuccessfulCheckDate: now
                     )
 
-                    if case .restocked = transition {
+                    if isConfirmedRestock {
                         let current = self.product.wrappedValue
                         if current.notificationProfile.shouldNotifyOnRestock {
+                            let (notifTitle, variantText) = Self.formatRestockNotification(for: current, evaluation: eval)
                             if self.notificationsEnabled && current.isMacOSNotificationEnabled {
                                 StockNotificationManager.shared.sendRestockNotification(
                                     productID: current.id,
                                     productName: current.productName,
                                     variantTitle: current.variantTitle,
-                                    productURL: current.productURL
+                                    productURL: current.productURL,
+                                    customTitle: notifTitle,
+                                    customBody: "\(current.productName) — \(variantText) artık stokta."
                                 )
                             } else {
                                 let reason = !self.notificationsEnabled
@@ -4656,7 +5016,7 @@ private struct StorePageWebView: NSViewRepresentable {
                                 NotificationAuditManager.shared.record(
                                     productID: current.id,
                                     productName: current.productName,
-                                    variantTitle: current.variantTitle,
+                                    variantTitle: variantText,
                                     channel: .macOS,
                                     status: .skipped,
                                     message: reason
@@ -4664,7 +5024,8 @@ private struct StorePageWebView: NSViewRepresentable {
                             }
                             if self.emailNotificationsEnabled && current.isEmailNotificationEnabled {
                                 EmailNotificationService.shared.sendRestockNotification(
-                                    for: current
+                                    for: current,
+                                    customVariantText: variantText
                                 )
                             } else {
                                 let reason = !self.emailNotificationsEnabled
@@ -4673,7 +5034,7 @@ private struct StorePageWebView: NSViewRepresentable {
                                 NotificationAuditManager.shared.record(
                                     productID: current.id,
                                     productName: current.productName,
-                                    variantTitle: current.variantTitle,
+                                    variantTitle: variantText,
                                     channel: .email,
                                     status: .skipped,
                                     message: reason
@@ -4841,13 +5202,17 @@ private struct StorePageWebView: NSViewRepresentable {
                 product.wrappedValue.lastChecked = checkedAt
                 if product.wrappedValue.isPaused {
                     product.wrappedValue.nextCheckDate = nil
+                } else if product.wrappedValue.pendingVerificationCount > 0 {
+                    product.wrappedValue.nextCheckDate = checkedAt.addingTimeInterval(2)
                 } else {
                     let effectiveMinutes = AdaptiveMonitoringPolicy.effectiveIntervalMinutes(
                         baseMinutes: product.wrappedValue.checkIntervalMinutes,
                         status: product.wrappedValue.status,
                         consecutiveUnchangedChecks: product.wrappedValue.consecutiveUnchangedChecks,
                         consecutiveFailureChecks: product.wrappedValue.consecutiveFailureChecks,
-                        isEnabled: adaptiveMonitoringEnabled
+                        isEnabled: adaptiveMonitoringEnabled,
+                        burstExpiresAt: product.wrappedValue.burstExpiresAt,
+                        burstIntervalMinutes: burstIntervalMinutes
                     )
                     product.wrappedValue.nextCheckDate = checkedAt.addingTimeInterval(
                         TimeInterval(effectiveMinutes * 60)
@@ -4865,6 +5230,39 @@ private struct StorePageWebView: NSViewRepresentable {
             }
             isChecking.wrappedValue = false
             onCheckComplete()
+        }
+
+        private static func formatRestockNotification(
+            for product: TrackedProduct,
+            evaluation: TrackedProduct.LogicalStockEvaluation
+        ) -> (title: String, variantText: String) {
+            let title = "Stok geldi! 🎉"
+            switch product.trackingRule {
+            case .exactVariant:
+                return (title, product.variantTitle)
+            case .anySizeInSelectedColor:
+                let color = product.selectedColorName ?? "Seçili Renk"
+                if evaluation.matchingCount == 1, let first = evaluation.matchingSnapshots.first {
+                    let size = first.sizeValue ?? first.displayTitle
+                    return (title, "\(color) · \(size)")
+                } else {
+                    return (title, "\(color) için \(evaluation.matchingCount) beden stokta")
+                }
+            case .selectedSizeInAnyColor:
+                let size = product.selectedSizeName ?? "Seçili Beden"
+                if evaluation.matchingCount == 1, let first = evaluation.matchingSnapshots.first {
+                    let color = first.colorValue ?? first.displayTitle
+                    return (title, "\(color) · \(size)")
+                } else {
+                    return (title, "\(size) için \(evaluation.matchingCount) renk stokta")
+                }
+            case .anyVariant:
+                if evaluation.matchingCount == 1, let first = evaluation.matchingSnapshots.first {
+                    return (title, first.displayTitle)
+                } else {
+                    return (title, "\(evaluation.matchingCount) varyant stokta")
+                }
+            }
         }
 
         private static func transition(from previous: Bool?, to current: Bool) -> AvailabilityTransition {
@@ -4979,6 +5377,8 @@ private final class StockNotificationManager {
         let variantTitle: String
         let productURL: URL
         let isRestock: Bool
+        var customTitle: String? = nil
+        var customBody: String? = nil
     }
 
     private var pendingNotices: [ProductNotice] = []
@@ -4986,8 +5386,23 @@ private final class StockNotificationManager {
 
     private init() {}
 
-    func sendRestockNotification(productID: UUID, productName: String, variantTitle: String, productURL: URL) {
-        pendingNotices.append(ProductNotice(productID: productID, productName: productName, variantTitle: variantTitle, productURL: productURL, isRestock: true))
+    func sendRestockNotification(
+        productID: UUID,
+        productName: String,
+        variantTitle: String,
+        productURL: URL,
+        customTitle: String? = nil,
+        customBody: String? = nil
+    ) {
+        pendingNotices.append(ProductNotice(
+            productID: productID,
+            productName: productName,
+            variantTitle: variantTitle,
+            productURL: productURL,
+            isRestock: true,
+            customTitle: customTitle,
+            customBody: customBody
+        ))
         guard !isProcessingNotices else { return }
 
         isProcessingNotices = true
@@ -5028,8 +5443,8 @@ private final class StockNotificationManager {
                 for notice in notices {
                     let content = UNMutableNotificationContent()
                     if notice.isRestock {
-                        content.title = "Stok geldi! 🎉"
-                        content.body = "\(notice.productName) — \(notice.variantTitle) artık stokta."
+                        content.title = notice.customTitle ?? "Stok geldi! 🎉"
+                        content.body = notice.customBody ?? "\(notice.productName) — \(notice.variantTitle) artık stokta."
                     } else {
                         content.title = "Stok tükendi"
                         content.body = "\(notice.productName) — \(notice.variantTitle) tükendi."
@@ -5103,6 +5518,10 @@ private struct SettingsView: View {
     @AppStorage("closedDisplayMonitoringEnabled") private var closedDisplayMonitoringEnabled = false
     @AppStorage("closedDisplayRequireACPower") private var closedDisplayRequireACPower = true
     @AppStorage("closedDisplayMinBatteryLevel") private var closedDisplayMinBatteryLevel = 20
+    @AppStorage("restockVerificationMode") private var globalVerificationMode: RestockVerificationMode = .off
+    @AppStorage("restockBurstModeEnabled") private var restockBurstModeEnabled = true
+    @AppStorage("restockBurstIntervalMinutes") private var restockBurstIntervalMinutes = 2
+    @AppStorage("restockBurstDurationMinutes") private var restockBurstDurationMinutes = 30
     @ObservedObject private var closedDisplayManager = ClosedDisplayManager.shared
     @State private var isAuthorizingHelper = false
     @State private var helperActionMessage: String?
@@ -5113,8 +5532,40 @@ private struct SettingsView: View {
     @State private var testEmailStatusIsError = false
 
     var body: some View {
+        TabView {
+            generalTab
+                .tabItem { Label("Genel", systemImage: "gearshape") }
+            monitoringTab
+                .tabItem { Label("İzleme", systemImage: "timer") }
+            notificationsTab
+                .tabItem { Label("Bildirimler", systemImage: "bell") }
+            powerTab
+                .tabItem { Label("Güç ve Kapak", systemImage: "bolt.fill") }
+            storesTab
+                .tabItem { Label("Mağazalar", systemImage: "storefront") }
+            advancedTab
+                .tabItem { Label("Gelişmiş", systemImage: "wrench.and.screwdriver") }
+        }
+        .frame(width: 540, height: 440)
+        .onAppear {
+            synchronizeLaunchAtLoginPreference()
+            closedDisplayManager.checkAuthorization()
+        }
+        .confirmationDialog(
+            "Ayarlar varsayılan değerlere dönsün mü?",
+            isPresented: $showingResetConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Varsayılanlara Dön", role: .destructive, action: resetSettings)
+            Button("İptal", role: .cancel) {}
+        } message: {
+            Text("Takip edilen ürünler ve ürün bazlı aralıklar korunur.")
+        }
+    }
+
+    private var generalTab: some View {
         Form {
-            Section("Genel") {
+            Section("Otomatik Kontrol") {
                 Toggle("Otomatik kontrol", isOn: $automaticCheckingEnabled)
 
                 Picker("Yeni ürünler için varsayılan kontrol aralığı", selection: $checkIntervalMinutes) {
@@ -5122,13 +5573,39 @@ private struct SettingsView: View {
                         Text(ProductCheckInterval.title(for: minutes)).tag(minutes)
                     }
                 }
+            }
 
-                Toggle("Akıllı kontrol aralığı", isOn: $adaptiveMonitoringEnabled)
-                Text("Uzun süre değişiklik olmadığında kontrol sıklığını otomatik olarak azaltır ve gereksiz istekleri sınırlar.")
+            Section("Başlangıç") {
+                Toggle(
+                    "Mac açıldığında başlat",
+                    isOn: Binding(
+                        get: { launchAtLoginEnabled },
+                        set: setLaunchAtLogin
+                    )
+                )
+
+                if let launchAtLoginMessage {
+                    Text(launchAtLoginMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Section {
+                Text("Kontroller, StockPing çalıştığı sürece arka planda gerçekleştirilir.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
 
-                Text("Kontroller, StockPing çalıştığı sürece gerçekleştirilir.")
+    private var monitoringTab: some View {
+        Form {
+            Section("Akıllı Aralık") {
+                Toggle("Akıllı kontrol aralığı (Adaptive Monitoring)", isOn: $adaptiveMonitoringEnabled)
+                Text("Uzun süre değişiklik olmadığında kontrol sıklığını otomatik olarak azaltır ve mağaza sunucularına gereksiz istekleri sınırlar.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -5167,22 +5644,53 @@ private struct SettingsView: View {
                 }
             }
 
-            Section("Bildirimler ve Otomasyon") {
+            Section("Restock Doğrulama ve Burst Modu") {
+                Picker("Genel Restock Doğrulama", selection: $globalVerificationMode) {
+                    ForEach(RestockVerificationMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                Text(globalVerificationMode.description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Divider()
+
+                Toggle("Restock Burst Modu", isOn: $restockBurstModeEnabled)
+                Text("Stok tespit edildiğinde geçici olarak yüksek frekanslı izleme yaparak stoğun stabilitesini takip eder.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if restockBurstModeEnabled {
+                    Picker("Burst kontrol sıklığı", selection: $restockBurstIntervalMinutes) {
+                        Text("1 dakika").tag(1)
+                        Text("2 dakika").tag(2)
+                    }
+
+                    Picker("Burst süresi", selection: $restockBurstDurationMinutes) {
+                        Text("15 dakika").tag(15)
+                        Text("30 dakika").tag(30)
+                        Text("45 dakika").tag(45)
+                        Text("60 dakika").tag(60)
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var notificationsTab: some View {
+        Form {
+            Section("macOS Bildirimleri") {
                 Toggle("Bildirimler", isOn: $stockNotificationsEnabled)
+                Text("Stok durumu değiştiğinde sistem bildirimi ve sesli uyarı verir.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
+            Section("E-posta Bildirimi") {
                 Toggle("E-posta bildirimi", isOn: $emailNotificationsEnabled)
-
                 Text("Ürün tekrar stokta olduğunda macOS Mail üzerinden e-posta gönderir.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Text("E-posta gönderimi, Mac'inizde yapılandırılmış Mail hesabı üzerinden gerçekleştirilir.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Toggle("Stok geldiğinde tarayıcıda otomatik aç", isOn: $autoOpenOnRestockEnabled)
-
-                Text("Ürün stoğa girdiğinde ürün sayfasını varsayılan web tarayıcınızda otomatik olarak açar.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -5211,25 +5719,19 @@ private struct SettingsView: View {
                 }
             }
 
-            Section("Mağaza Durumu") {
-                let savedProducts = TrackedProductStore.load()
-                let summaries = ProviderHealthSummary.allSummaries(for: savedProducts, isNetworkAvailable: NetworkReachabilityMonitor.shared.canProceedWithChecks)
-                ForEach(summaries) { summary in
-                    HStack {
-                        Image(systemName: summary.health.symbol)
-                            .foregroundStyle(summary.health.color)
-                        Text(summary.provider.displayName)
-                        Spacer()
-                        Text("\(summary.productCount) ürün")
-                            .foregroundStyle(.secondary)
-                        Text("(\(summary.health.title))")
-                            .foregroundStyle(summary.health.color)
-                            .font(.caption)
-                    }
-                }
+            Section("Otomasyon") {
+                Toggle("Stok geldiğinde tarayıcıda otomatik aç", isOn: $autoOpenOnRestockEnabled)
+                Text("Ürün stoğa girdiğinde ürün sayfasını varsayılan web tarayıcınızda otomatik olarak açar (Doğrulama etkinse onay sonrasında açılır).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
+        }
+        .formStyle(.grouped)
+    }
 
-            Section("Mac Uyku ve Güç Yönetimi") {
+    private var powerTab: some View {
+        Form {
+            Section("Mac Güç Yönetimi") {
                 Picker("İzleme sırasında güç modu", selection: $monitoringPowerMode) {
                     ForEach(MonitoringPowerMode.allCases) { mode in
                         Text(mode.title).tag(mode)
@@ -5240,11 +5742,10 @@ private struct SettingsView: View {
                 Text(monitoringPowerMode.description)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
 
-                Divider()
-
-                Toggle("Kapak Kapalı Takip Modu (Closed-Display)", isOn: $closedDisplayMonitoringEnabled)
-
+            Section("Kapak Kapalı Takip Modu (Closed-Display)") {
+                Toggle("Kapak Kapalı Takip Modu", isOn: $closedDisplayMonitoringEnabled)
                 Text("Apple Silicon Mac'lerde ekran kapağı kapatıldığında dahili ekran kapanır, Mac uykuya geçmez ve arka plan stok kontrolleri kesintisiz devam eder.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -5334,50 +5835,69 @@ private struct SettingsView: View {
                     }
                     .padding(.top, 4)
                 }
-
-                Text("Bu ayarlar yalnızca StockPing aktif olarak ürünleri izlerken uygulanır.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
+        }
+        .formStyle(.grouped)
+    }
 
-            Section("Başlangıç") {
-                Toggle(
-                    "Mac açıldığında başlat",
-                    isOn: Binding(
-                        get: { launchAtLoginEnabled },
-                        set: setLaunchAtLogin
-                    )
-                )
-
-                if let launchAtLoginMessage {
-                    Text(launchAtLoginMessage)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            Section {
-                Button("Varsayılanlara Dön", role: .destructive) {
-                    showingResetConfirmation = true
+    private var storesTab: some View {
+        Form {
+            Section("Mağaza Durumu") {
+                let savedProducts = TrackedProductStore.load()
+                let summaries = ProviderHealthSummary.allSummaries(for: savedProducts, isNetworkAvailable: NetworkReachabilityMonitor.shared.canProceedWithChecks)
+                ForEach(summaries) { summary in
+                    HStack {
+                        Image(systemName: summary.health.symbol)
+                            .foregroundStyle(summary.health.color)
+                        Text(summary.provider.displayName)
+                        Spacer()
+                        Text("\(summary.productCount) ürün")
+                            .foregroundStyle(.secondary)
+                        Text("(\(summary.health.title))")
+                            .foregroundStyle(summary.health.color)
+                            .font(.caption)
+                    }
                 }
             }
         }
         .formStyle(.grouped)
-        .onAppear {
-            synchronizeLaunchAtLoginPreference()
-            closedDisplayManager.checkAuthorization()
+    }
+
+    private var advancedTab: some View {
+        Form {
+            Section("Yedekleme ve Geri Yükleme") {
+                HStack(spacing: 12) {
+                    Button("Yedek Dışa Aktar...") {
+                        ProductBackupService.shared.exportProducts(TrackedProductStore.load())
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("Yedekten Geri Yükle...") {
+                        ProductBackupService.shared.promptImport(existingProducts: TrackedProductStore.load()) { imported in
+                            guard !imported.isEmpty else { return }
+                            var current = TrackedProductStore.load()
+                            current.append(contentsOf: imported)
+                            TrackedProductStore.save(current)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Text("Tüm takip edilen ürünleri, akıllı takip kurallarını ve ayarları JSON formatında yedekleyin veya geri yükleyin.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Sıfırlama") {
+                Button("Varsayılanlara Dön", role: .destructive) {
+                    showingResetConfirmation = true
+                }
+                Text("StockPing ayarlarını varsayılan fabrika değerlerine döndürür. Takip edilen ürünleriniz silinmez.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
-        .confirmationDialog(
-            "Ayarlar varsayılan değerlere dönsün mü?",
-            isPresented: $showingResetConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("Varsayılanlara Dön", role: .destructive, action: resetSettings)
-            Button("İptal", role: .cancel) {}
-        } message: {
-            Text("Takip edilen ürünler ve ürün bazlı aralıklar korunur.")
-        }
+        .formStyle(.grouped)
     }
 
     private func synchronizeLaunchAtLoginPreference() {
@@ -5481,6 +6001,10 @@ private struct SettingsView: View {
         closedDisplayMonitoringEnabled = false
         closedDisplayRequireACPower = true
         closedDisplayMinBatteryLevel = 20
+        globalVerificationMode = .off
+        restockBurstModeEnabled = true
+        restockBurstIntervalMinutes = 2
+        restockBurstDurationMinutes = 30
         helperActionMessage = nil
         testEmailStatusMessage = nil
         testEmailStatusIsError = false
@@ -5532,6 +6056,7 @@ private struct AddProductSheet: View {
     @State private var optionDimensions: [DiscoveredOptionDimension] = []
     @State private var selectedFilterOptionValue = "all"
     @State private var selectedVariantIDs: Set<String> = []
+    @State private var selectedTrackingRule: SmartTrackingRule = .exactVariant
     @State private var analysisError: String?
     @State private var duplicateError: String?
     @FocusState private var isURLFieldFocused: Bool
@@ -5682,69 +6207,7 @@ private struct AddProductSheet: View {
                             ScrollView {
                                 VStack(spacing: 2) {
                                     ForEach(visibleVariants) { candidate in
-                                        let isTracked = isCandidateAlreadyTracked(candidate)
-                                        let isSelected = selectedVariantIDs.contains(candidate.id)
-
-                                        HStack(spacing: 10) {
-                                            Toggle("", isOn: Binding(
-                                                get: { isSelected },
-                                                set: { shouldSelect in
-                                                    if shouldSelect {
-                                                        selectedVariantIDs.insert(candidate.id)
-                                                    } else {
-                                                        selectedVariantIDs.remove(candidate.id)
-                                                    }
-                                                }
-                                            ))
-                                            .labelsHidden()
-                                            .disabled(isTracked)
-
-                                            Text(candidate.displayTitle)
-                                                .font(.body)
-                                                .foregroundStyle(isTracked ? .secondary : .primary)
-                                                .strikethrough(isTracked)
-
-                                            Spacer()
-
-                                            if let available = candidate.initialAvailability {
-                                                if available {
-                                                    Text("Stokta")
-                                                        .font(.caption2.weight(.medium))
-                                                        .padding(.horizontal, 6)
-                                                        .padding(.vertical, 2)
-                                                        .background(Color.green.opacity(0.15), in: Capsule())
-                                                        .foregroundStyle(.green)
-                                                } else {
-                                                    Text("Stokta değil")
-                                                        .font(.caption2.weight(.medium))
-                                                        .padding(.horizontal, 6)
-                                                        .padding(.vertical, 2)
-                                                        .background(Color.secondary.opacity(0.12), in: Capsule())
-                                                        .foregroundStyle(.secondary)
-                                                }
-                                            }
-
-                                            if isTracked {
-                                                Text("Zaten Takipte")
-                                                    .font(.caption2.weight(.medium))
-                                                    .padding(.horizontal, 6)
-                                                    .padding(.vertical, 2)
-                                                    .background(Color.orange.opacity(0.15), in: Capsule())
-                                                    .foregroundStyle(.orange)
-                                            }
-                                        }
-                                        .padding(.vertical, 5)
-                                        .padding(.horizontal, 8)
-                                        .background(isSelected ? Color.accentColor.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
-                                        .contentShape(Rectangle())
-                                        .onTapGesture {
-                                            guard !isTracked else { return }
-                                            if isSelected {
-                                                selectedVariantIDs.remove(candidate.id)
-                                            } else {
-                                                selectedVariantIDs.insert(candidate.id)
-                                            }
-                                        }
+                                        candidateRow(candidate)
                                     }
                                 }
                                 .padding(4)
@@ -5752,6 +6215,30 @@ private struct AddProductSheet: View {
                             .frame(maxHeight: 180)
                             .background(Color(nsColor: .controlBackgroundColor).opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
                             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.15), lineWidth: 1))
+
+                            Divider()
+
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Akıllı Takip Kuralı")
+                                    .font(.subheadline.weight(.medium))
+
+                                Picker("Akıllı Takip Kuralı", selection: $selectedTrackingRule) {
+                                    ForEach(SmartTrackingRule.allCases) { rule in
+                                        Label(rule.title, systemImage: rule.symbol).tag(rule)
+                                    }
+                                }
+                                .labelsHidden()
+                                .pickerStyle(.segmented)
+
+                                let firstCandidate = variants.first { selectedVariantIDs.contains($0.id) }
+                                let colVal = firstCandidate?.variant.options.first(where: { SmartTrackingRule.isColorOptionName($0.name) })?.value
+                                let szVal = firstCandidate?.variant.options.first(where: { SmartTrackingRule.isSizeOptionName($0.name) })?.value
+
+                                Text(selectedTrackingRule.preview(color: colVal, size: szVal))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.top, 4)
                         }
                         .padding(4)
                     }
@@ -5822,6 +6309,7 @@ private struct AddProductSheet: View {
         optionDimensions = []
         selectedFilterOptionValue = "all"
         selectedVariantIDs = []
+        selectedTrackingRule = .exactVariant
         analysisError = nil
         duplicateError = nil
     }
@@ -5894,7 +6382,8 @@ private struct AddProductSheet: View {
                 pullAndBearMetadata: candidate.pullAndBearMetadata,
                 hmMetadata: candidate.hmMetadata,
                 events: [],
-                variantSnapshots: snapshots
+                variantSnapshots: snapshots,
+                trackingRule: selectedTrackingRule
             )
         }
 
@@ -5903,6 +6392,78 @@ private struct AddProductSheet: View {
             dismiss()
         } else {
             duplicateError = "Seçilen varyantlar zaten takip ediliyor."
+        }
+    }
+
+    @ViewBuilder
+    private func candidateRow(_ candidate: StoreVariantCandidate) -> some View {
+        let isTracked = isCandidateAlreadyTracked(candidate)
+        let isSelected = selectedVariantIDs.contains(candidate.id)
+
+        HStack(spacing: 10) {
+            Toggle("", isOn: Binding(
+                get: { isSelected },
+                set: { shouldSelect in
+                    if shouldSelect {
+                        selectedVariantIDs.insert(candidate.id)
+                    } else {
+                        selectedVariantIDs.remove(candidate.id)
+                    }
+                }
+            ))
+            .labelsHidden()
+            .disabled(isTracked)
+
+            Text(candidate.displayTitle)
+                .font(.body)
+                .foregroundStyle(isTracked ? .secondary : .primary)
+                .strikethrough(isTracked)
+
+            Spacer()
+
+            candidateAvailabilityBadge(available: candidate.initialAvailability)
+
+            if isTracked {
+                Text("Zaten Takipte")
+                    .font(.caption2.weight(.medium))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.orange.opacity(0.15), in: Capsule())
+                    .foregroundStyle(.orange)
+            }
+        }
+        .padding(.vertical, 5)
+        .padding(.horizontal, 8)
+        .background(isSelected ? Color.accentColor.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard !isTracked else { return }
+            if isSelected {
+                selectedVariantIDs.remove(candidate.id)
+            } else {
+                selectedVariantIDs.insert(candidate.id)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func candidateAvailabilityBadge(available: Bool?) -> some View {
+        if let available {
+            if available {
+                Text("Stokta")
+                    .font(.caption2.weight(.medium))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.green.opacity(0.15), in: Capsule())
+                    .foregroundStyle(.green)
+            } else {
+                Text("Stokta değil")
+                    .font(.caption2.weight(.medium))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.12), in: Capsule())
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

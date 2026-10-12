@@ -30,6 +30,179 @@ struct SelectedVariant: Codable, Hashable, Sendable {
     }
 }
 
+enum SmartTrackingRule: String, Codable, Hashable, Sendable, CaseIterable, Identifiable {
+    case exactVariant
+    case anySizeInSelectedColor
+    case selectedSizeInAnyColor
+    case anyVariant
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .exactVariant: return "Tam varyant"
+        case .anySizeInSelectedColor: return "Bu rengin herhangi bir bedeni"
+        case .selectedSizeInAnyColor: return "Bu bedenin herhangi bir rengi"
+        case .anyVariant: return "Ürünün herhangi bir varyantı"
+        }
+    }
+
+    var shortTitle: String {
+        switch self {
+        case .exactVariant: return "Tam varyant"
+        case .anySizeInSelectedColor: return "Rengin her bedeni"
+        case .selectedSizeInAnyColor: return "Bedenin her rengi"
+        case .anyVariant: return "Tüm varyantlar"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .exactVariant:
+            return "Yalnızca seçilen varyant takip edilir."
+        case .anySizeInSelectedColor:
+            return "Seçilen rengin herhangi bir bedeni stokta olduğunda bildirilir."
+        case .selectedSizeInAnyColor:
+            return "Seçilen bedenin herhangi bir rengi stokta olduğunda bildirilir."
+        case .anyVariant:
+            return "Ürünün herhangi bir varyantı stokta olduğunda bildirilir."
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .exactVariant: return "target"
+        case .anySizeInSelectedColor: return "tshirt"
+        case .selectedSizeInAnyColor: return "paintpalette"
+        case .anyVariant: return "square.grid.2x2"
+        }
+    }
+
+    func previewText(selectedVariant: SelectedVariant, colorName: String? = nil, sizeName: String? = nil) -> String {
+        switch self {
+        case .exactVariant:
+            let title = selectedVariant.displayTitle ?? "seçilen varyant"
+            return "Yalnızca \(title) takip edilecek."
+        case .anySizeInSelectedColor:
+            if let color = colorName, !color.isEmpty {
+                return "\(color) rengin herhangi bir bedeni takip edilecek."
+            }
+            return "Seçilen rengin herhangi bir bedeni takip edilecek."
+        case .selectedSizeInAnyColor:
+            if let size = sizeName, !size.isEmpty {
+                return "\(size) bedenin herhangi bir rengi takip edilecek."
+            }
+            return "Seçilen bedenin herhangi bir rengi takip edilecek."
+        case .anyVariant:
+            return "Ürünün herhangi bir varyantı stokta olduğunda bildirim alacaksınız."
+        }
+    }
+
+    func preview(color: String? = nil, size: String? = nil) -> String {
+        switch self {
+        case .exactVariant:
+            if let color, let size { return "Yalnızca bu renk (\(color)) ve bu beden (\(size)) için stok geldiğinde uyarılır." }
+            return "Yalnızca seçilen kesin varyant için stok geldiğinde uyarılır."
+        case .anySizeInSelectedColor:
+            let c = color ?? "seçili renk"
+            return "\(c) renginin herhangi bir bedeni stoğa girdiğinde uyarılır."
+        case .selectedSizeInAnyColor:
+            let s = size ?? "seçili beden"
+            return "\(s) bedeninin herhangi bir rengi stoğa girdiğinde uyarılır."
+        case .anyVariant:
+            return "Ürünün herhangi bir rengi veya bedeni stoğa girdiğinde uyarılır."
+        }
+    }
+
+    static func isColorOptionName(_ name: String) -> Bool {
+        let lower = name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        return lower.contains("renk") || lower.contains("color") || lower.contains("colour")
+    }
+
+    static func isSizeOptionName(_ name: String) -> Bool {
+        let lower = name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        return lower.contains("beden") || lower.contains("size") || lower.contains("boy") || lower.contains("numara")
+    }
+}
+
+enum SmartAlertCondition: Hashable, Codable, Sendable {
+    case anyMatching
+    case minimumCount(Int)
+
+    var title: String {
+        switch self {
+        case .anyMatching:
+            return "Herhangi biri stokta olduğunda"
+        case .minimumCount(let count):
+            return "En az \(count) varyant stokta olduğunda"
+        }
+    }
+
+    var threshold: Int {
+        switch self {
+        case .anyMatching: return 1
+        case .minimumCount(let n): return max(1, n)
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case type, count
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let type = try container.decode(String.self, forKey: .type)
+        if type == "minimumCount", let count = try container.decodeIfPresent(Int.self, forKey: .count) {
+            self = .minimumCount(max(1, count))
+        } else {
+            self = .anyMatching
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .anyMatching:
+            try container.encode("anyMatching", forKey: .type)
+        case .minimumCount(let count):
+            try container.encode("minimumCount", forKey: .type)
+            try container.encode(count, forKey: .count)
+        }
+    }
+}
+
+enum RestockVerificationMode: String, Codable, Hashable, Sendable, CaseIterable, Identifiable {
+    case off
+    case oneConfirmation
+    case twoConfirmations
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .off: return "Kapalı"
+        case .oneConfirmation: return "1 kez doğrula"
+        case .twoConfirmations: return "2 kez doğrula"
+        }
+    }
+
+    var requiredConfirmations: Int {
+        switch self {
+        case .off: return 0
+        case .oneConfirmation: return 1
+        case .twoConfirmations: return 2
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .off: return "Stok tespit edildiğinde anında bildirim gönderilir."
+        case .oneConfirmation: return "Stok tespit edildiğinde arka planda 1 ek hızlı kontrolle teyit edildikten sonra bildirilir."
+        case .twoConfirmations: return "Stok tespit edildiğinde arka planda 2 ardışık kontrolle teyit edildikten sonra bildirilir."
+        }
+    }
+}
+
 enum VariantAvailabilityState: String, Codable, Hashable, Sendable, CaseIterable {
     case inStock
     case outOfStock
@@ -104,6 +277,14 @@ struct VariantStockSnapshot: Identifiable, Codable, Hashable, Sendable {
 
     func optionValue(for dimensionName: String) -> String? {
         options.first(where: { $0.name.caseInsensitiveCompare(dimensionName) == .orderedSame })?.value
+    }
+
+    var colorValue: String? {
+        options.first(where: { SmartTrackingRule.isColorOptionName($0.name) })?.value
+    }
+
+    var sizeValue: String? {
+        options.first(where: { SmartTrackingRule.isSizeOptionName($0.name) })?.value
     }
 
     init(
@@ -403,6 +584,7 @@ enum ProviderHealth: String, Codable, Sendable, CaseIterable {
     case healthy
     case warning
     case unknown
+    case notTracked
     case networkUnavailable
 
     var title: String {
@@ -410,6 +592,7 @@ enum ProviderHealth: String, Codable, Sendable, CaseIterable {
         case .healthy: "Sorunsuz"
         case .warning: "Uyarı"
         case .unknown: "Bilinmiyor"
+        case .notTracked: "Takip edilmiyor"
         case .networkUnavailable: "Ağ Yok"
         }
     }
@@ -419,6 +602,7 @@ enum ProviderHealth: String, Codable, Sendable, CaseIterable {
         case .healthy: "checkmark.circle.fill"
         case .warning: "exclamationmark.triangle.fill"
         case .unknown: "questionmark.circle"
+        case .notTracked: "slash.circle"
         case .networkUnavailable: "wifi.slash"
         }
     }
@@ -427,7 +611,7 @@ enum ProviderHealth: String, Codable, Sendable, CaseIterable {
         switch self {
         case .healthy: .green
         case .warning: .orange
-        case .unknown: .secondary
+        case .unknown, .notTracked: .secondary
         case .networkUnavailable: .red
         }
     }
@@ -467,7 +651,7 @@ struct ProviderHealthSummary: Identifiable, Sendable {
         if providerProducts.isEmpty {
             return ProviderHealthSummary(
                 provider: provider,
-                health: .unknown,
+                health: .notTracked,
                 productCount: 0,
                 activeProductCount: 0,
                 lastSuccessfulCheckDate: nil,
@@ -696,6 +880,110 @@ struct TrackedProduct: Identifiable {
     var autoOpenOnRestock: Bool? = nil
     var variantSnapshots: [VariantStockSnapshot]? = nil
 
+    var trackingRule: SmartTrackingRule = .exactVariant
+    var alertCondition: SmartAlertCondition = .anyMatching
+    var verificationPreference: RestockVerificationMode? = nil
+    var burstPreference: Bool? = nil
+    var burstExpiresAt: Date? = nil
+    var pendingVerificationCount: Int = 0
+    var logicalAvailability: Bool? = nil
+
+    var isBurstActive: Bool {
+        guard let burstExpiresAt else { return false }
+        return burstExpiresAt > Date()
+    }
+
+    var effectiveAvailability: Bool? {
+        logicalAvailability ?? selectedVariant.availability
+    }
+
+    var selectedColorName: String? {
+        if let color = zaraMetadata?.colorName, !color.isEmpty { return color }
+        if let color = bershkaMetadata?.colorName, !color.isEmpty { return color }
+        if let color = hmMetadata?.colorName, !color.isEmpty { return color }
+        if let color = pullAndBearMetadata?.colorName, !color.isEmpty { return color }
+        return selectedVariant.options.first(where: { SmartTrackingRule.isColorOptionName($0.name) })?.value
+    }
+
+    var selectedSizeName: String? {
+        if let size = bershkaMetadata?.sizeName, !size.isEmpty { return size }
+        if let size = hmMetadata?.sizeName, !size.isEmpty { return size }
+        if let size = pullAndBearMetadata?.sizeName, !size.isEmpty { return size }
+        if let size = selectedVariant.options.first(where: { SmartTrackingRule.isSizeOptionName($0.name) })?.value {
+            return size
+        }
+        if provider == .zara {
+            return selectedVariant.displayTitle
+        }
+        return nil
+    }
+
+    struct LogicalStockEvaluation: Sendable, Hashable {
+        let isAvailable: Bool
+        let matchingCount: Int
+        let matchingSnapshots: [VariantStockSnapshot]
+        let candidateSnapshots: [VariantStockSnapshot]
+    }
+
+    func evaluateLogicalStock(snapshots: [VariantStockSnapshot]) -> LogicalStockEvaluation {
+        let allCandidates = snapshots.isEmpty ? currentVariantSnapshots : snapshots
+        let matchedCandidates: [VariantStockSnapshot]
+
+        switch trackingRule {
+        case .exactVariant:
+            if let exact = allCandidates.first(where: { $0.id == selectedVariant.id }) {
+                matchedCandidates = [exact]
+            } else if let exact = allCandidates.first(where: { $0.displayTitle.caseInsensitiveCompare(selectedVariant.displayTitle ?? "") == .orderedSame }) {
+                matchedCandidates = [exact]
+            } else {
+                matchedCandidates = [VariantStockSnapshot(from: selectedVariant, lastChecked: lastChecked)]
+            }
+
+        case .anySizeInSelectedColor:
+            if let myColor = selectedColorName?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines), !myColor.isEmpty {
+                let filtered = allCandidates.filter { snap in
+                    if let c = snap.colorValue?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines), !c.isEmpty {
+                        return c == myColor
+                    }
+                    return true
+                }
+                matchedCandidates = filtered.isEmpty ? allCandidates : filtered
+            } else {
+                matchedCandidates = allCandidates
+            }
+
+        case .selectedSizeInAnyColor:
+            if let mySize = selectedSizeName?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines), !mySize.isEmpty {
+                let filtered = allCandidates.filter { snap in
+                    if let s = snap.sizeValue?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
+                        return s == mySize
+                    }
+                    if snap.displayTitle.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == mySize {
+                        return true
+                    }
+                    return false
+                }
+                matchedCandidates = filtered.isEmpty ? allCandidates : filtered
+            } else {
+                matchedCandidates = allCandidates
+            }
+
+        case .anyVariant:
+            matchedCandidates = allCandidates
+        }
+
+        let inStockSnapshots = matchedCandidates.filter { $0.state == .inStock }
+        let count = inStockSnapshots.count
+        let isAvailable = count >= alertCondition.threshold
+
+        return LogicalStockEvaluation(
+            isAvailable: isAvailable,
+            matchingCount: count,
+            matchingSnapshots: inStockSnapshots,
+            candidateSnapshots: matchedCandidates
+        )
+    }
+
     var currentVariantSnapshots: [VariantStockSnapshot] {
         if let snapshots = variantSnapshots, !snapshots.isEmpty {
             return snapshots
@@ -717,8 +1005,8 @@ struct TrackedProduct: Identifiable {
     var status: ProductStatus {
         if isPaused { return .paused }
         if lastCheckError != nil { return .error }
-        if selectedVariant.availability == true { return .inStock }
-        if selectedVariant.availability == false { return .outOfStock }
+        if effectiveAvailability == true { return .inStock }
+        if effectiveAvailability == false { return .outOfStock }
         return .unchecked
     }
 
@@ -848,7 +1136,7 @@ enum AvailabilityTransition: Equatable, Sendable {
     case unchanged(available: Bool)
 }
 
-private struct SavedTrackedProduct: Codable {
+struct SavedTrackedProduct: Codable {
     let id: UUID
     let productName: String
     let productURL: URL
@@ -877,6 +1165,14 @@ private struct SavedTrackedProduct: Codable {
     let notificationProfile: NotificationProfile
     let autoOpenOnRestock: Bool?
     let variantSnapshots: [VariantStockSnapshot]?
+
+    let trackingRule: SmartTrackingRule
+    let alertCondition: SmartAlertCondition
+    let verificationPreference: RestockVerificationMode?
+    let burstPreference: Bool?
+    let burstExpiresAt: Date?
+    let pendingVerificationCount: Int
+    let logicalAvailability: Bool?
 
     init(_ product: TrackedProduct) {
         id = product.id
@@ -907,6 +1203,14 @@ private struct SavedTrackedProduct: Codable {
         notificationProfile = product.notificationProfile
         autoOpenOnRestock = product.autoOpenOnRestock
         variantSnapshots = product.variantSnapshots
+
+        trackingRule = product.trackingRule
+        alertCondition = product.alertCondition
+        verificationPreference = product.verificationPreference
+        burstPreference = product.burstPreference
+        burstExpiresAt = product.burstExpiresAt
+        pendingVerificationCount = product.pendingVerificationCount
+        logicalAvailability = product.logicalAvailability
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -917,6 +1221,7 @@ private struct SavedTrackedProduct: Codable {
         case consecutiveUnchangedChecks, consecutiveFailureChecks
         case isPriority, note, isMacOSNotificationEnabled, isEmailNotificationEnabled
         case notificationProfile, autoOpenOnRestock, variantSnapshots
+        case trackingRule, alertCondition, verificationPreference, burstPreference, burstExpiresAt, pendingVerificationCount, logicalAvailability
         // Fields written by trackedProducts.v1 before SelectedVariant was introduced.
         case variantID, variantTitle, lastKnownAvailable, status, options
     }
@@ -965,6 +1270,16 @@ private struct SavedTrackedProduct: Codable {
         notificationProfile = try values.decodeIfPresent(NotificationProfile.self, forKey: .notificationProfile) ?? .standard
         autoOpenOnRestock = try values.decodeIfPresent(Bool.self, forKey: .autoOpenOnRestock)
         variantSnapshots = try values.decodeIfPresent([VariantStockSnapshot].self, forKey: .variantSnapshots)
+
+        trackingRule = try values.decodeIfPresent(SmartTrackingRule.self, forKey: .trackingRule) ?? .exactVariant
+        alertCondition = try values.decodeIfPresent(SmartAlertCondition.self, forKey: .alertCondition) ?? .anyMatching
+        verificationPreference = try values.decodeIfPresent(RestockVerificationMode.self, forKey: .verificationPreference)
+        burstPreference = try values.decodeIfPresent(Bool.self, forKey: .burstPreference)
+        burstExpiresAt = try values.decodeIfPresent(Date.self, forKey: .burstExpiresAt)
+        pendingVerificationCount = try values.decodeIfPresent(Int.self, forKey: .pendingVerificationCount) ?? 0
+        logicalAvailability = try values.decodeIfPresent(Bool.self, forKey: .logicalAvailability)
+            ?? (try values.decodeIfPresent(Bool.self, forKey: .lastKnownAvailable))
+            ?? selectedVariant.availability
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1015,6 +1330,20 @@ private struct SavedTrackedProduct: Codable {
         if let variantSnapshots, !variantSnapshots.isEmpty {
             try values.encode(Array(variantSnapshots.prefix(50)), forKey: .variantSnapshots)
         }
+
+        if trackingRule != .exactVariant {
+            try values.encode(trackingRule, forKey: .trackingRule)
+        }
+        if alertCondition != .anyMatching {
+            try values.encode(alertCondition, forKey: .alertCondition)
+        }
+        try values.encodeIfPresent(verificationPreference, forKey: .verificationPreference)
+        try values.encodeIfPresent(burstPreference, forKey: .burstPreference)
+        try values.encodeIfPresent(burstExpiresAt, forKey: .burstExpiresAt)
+        if pendingVerificationCount > 0 {
+            try values.encode(pendingVerificationCount, forKey: .pendingVerificationCount)
+        }
+        try values.encodeIfPresent(logicalAvailability, forKey: .logicalAvailability)
     }
 }
 
@@ -1050,7 +1379,11 @@ enum TrackedProductStore {
     }
 }
 
-private extension SavedTrackedProduct {
+extension SavedTrackedProduct {
+    func toTrackedProduct() -> TrackedProduct {
+        trackedProduct
+    }
+
     var trackedProduct: TrackedProduct {
         TrackedProduct(
             id: id,
@@ -1081,7 +1414,14 @@ private extension SavedTrackedProduct {
             isEmailNotificationEnabled: isEmailNotificationEnabled,
             notificationProfile: notificationProfile,
             autoOpenOnRestock: autoOpenOnRestock,
-            variantSnapshots: variantSnapshots
+            variantSnapshots: variantSnapshots,
+            trackingRule: trackingRule,
+            alertCondition: alertCondition,
+            verificationPreference: verificationPreference,
+            burstPreference: burstPreference,
+            burstExpiresAt: burstExpiresAt,
+            pendingVerificationCount: pendingVerificationCount,
+            logicalAvailability: logicalAvailability
         )
     }
 }
@@ -1120,16 +1460,23 @@ struct AdaptiveMonitoringPolicy: Sendable {
         status: ProductStatus,
         consecutiveUnchangedChecks: Int,
         consecutiveFailureChecks: Int,
-        isEnabled: Bool
+        isEnabled: Bool,
+        burstExpiresAt: Date? = nil,
+        burstIntervalMinutes: Int = 2
     ) -> Int {
-        guard isEnabled else { return baseMinutes }
-
-        // Progressive backoff for repeated check failures
+        // Progressive backoff for repeated check failures ALWAYS takes precedence (failure backoff üstün)
         if consecutiveFailureChecks >= 5 {
             return min(maxAdaptiveIntervalMinutes, max(baseMinutes * 3, 15))
         } else if consecutiveFailureChecks >= 3 {
             return min(maxAdaptiveIntervalMinutes, baseMinutes * 2)
         }
+
+        // Restock Burst Mode: high frequency (1-2 min) for temporary duration following restock
+        if let burstExpiresAt, burstExpiresAt > Date() {
+            return min(baseMinutes, max(1, burstIntervalMinutes))
+        }
+
+        guard isEnabled else { return baseMinutes }
 
         // Only scale back checking for confirmed out-of-stock products
         guard status == .outOfStock else { return baseMinutes }
@@ -1161,12 +1508,17 @@ struct AdaptiveMonitoringPolicy: Sendable {
         status: ProductStatus,
         consecutiveUnchangedChecks: Int,
         consecutiveFailureChecks: Int,
-        isEnabled: Bool
+        isEnabled: Bool,
+        burstExpiresAt: Date? = nil
     ) -> String? {
-        guard isEnabled, effectiveMinutes != baseMinutes else { return nil }
         if consecutiveFailureChecks >= 3 {
             return "Arka arkaya \(consecutiveFailureChecks) kontrol başarısız olduğu için istek sıklığı azaltıldı (\(effectiveMinutes) dk)."
         }
+        if let burstExpiresAt, burstExpiresAt > Date() {
+            let minsRemaining = max(1, Int(burstExpiresAt.timeIntervalSinceNow / 60))
+            return "Stok geldiği için burst takip modu devrede (\(effectiveMinutes) dk, \(minsRemaining) dk kaldı)."
+        }
+        guard isEnabled, effectiveMinutes != baseMinutes else { return nil }
         if status == .outOfStock && consecutiveUnchangedChecks >= 4 {
             return "Ürün \(consecutiveUnchangedChecks) kontroldür stokta olmadığı için kontrol sıklığı akıllı olarak azaltıldı (\(effectiveMinutes) dk)."
         }

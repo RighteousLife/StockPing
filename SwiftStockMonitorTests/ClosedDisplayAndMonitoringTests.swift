@@ -226,4 +226,301 @@ final class ClosedDisplayAndMonitoringTests: XCTestCase {
         XCTAssertTrue(shouldCloseOnTerminate, "windowShouldClose must return true when app is terminating")
         SwiftStockAppDelegate.isTerminating = false
     }
+
+    // MARK: - 5. Smart Tracking Rules Tests
+
+    func testSmartTrackingRuleExactVariant() {
+        let variantA = SelectedVariant(id: "A1", title: "Siyah - S", options: [
+            VariantOption(name: "Renk", value: "Siyah"),
+            VariantOption(name: "Beden", value: "S")
+        ], availability: false)
+
+        var product = TrackedProduct(
+            id: UUID(),
+            productName: "Test Tişört",
+            productURL: URL(string: "https://shop.example.com/products/test")!,
+            selectedVariant: variantA,
+            lastChecked: Date(),
+            checkIntervalMinutes: 5,
+            nextCheckDate: Date(),
+            isPaused: false,
+            lastCheckError: nil,
+            lastAvailabilityTransition: nil,
+            provider: .shopify,
+            trackingRule: .exactVariant,
+            alertCondition: .anyMatching
+        )
+
+        let snapshots = [
+            VariantStockSnapshot(id: "A1", title: "Siyah - S", options: variantA.options, state: .outOfStock, lastChecked: Date()),
+            VariantStockSnapshot(id: "A2", title: "Siyah - M", options: [VariantOption(name: "Renk", value: "Siyah"), VariantOption(name: "Beden", value: "M")], state: .inStock, lastChecked: Date())
+        ]
+
+        let eval = product.evaluateLogicalStock(snapshots: snapshots)
+        XCTAssertFalse(eval.isAvailable, "Exact variant A1 is out of stock, so logical evaluation must be false even though A2 is in stock")
+        XCTAssertEqual(eval.matchingCount, 0)
+    }
+
+    func testSmartTrackingRuleAnySizeInSelectedColor() {
+        let variantA = SelectedVariant(id: "A1", title: "Siyah - S", options: [
+            VariantOption(name: "Renk", value: "Siyah"),
+            VariantOption(name: "Beden", value: "S")
+        ], availability: false)
+
+        var product = TrackedProduct(
+            id: UUID(),
+            productName: "Test Tişört",
+            productURL: URL(string: "https://shop.example.com/products/test")!,
+            selectedVariant: variantA,
+            lastChecked: Date(),
+            checkIntervalMinutes: 5,
+            nextCheckDate: Date(),
+            isPaused: false,
+            lastCheckError: nil,
+            lastAvailabilityTransition: nil,
+            provider: .shopify,
+            trackingRule: .anySizeInSelectedColor,
+            alertCondition: .anyMatching
+        )
+
+        let snapshots = [
+            VariantStockSnapshot(id: "A1", title: "Siyah - S", options: variantA.options, state: .outOfStock, lastChecked: Date()),
+            VariantStockSnapshot(id: "A2", title: "Siyah - M", options: [VariantOption(name: "Renk", value: "Siyah"), VariantOption(name: "Beden", value: "M")], state: .inStock, lastChecked: Date()),
+            VariantStockSnapshot(id: "B1", title: "Beyaz - S", options: [VariantOption(name: "Renk", value: "Beyaz"), VariantOption(name: "Beden", value: "S")], state: .inStock, lastChecked: Date())
+        ]
+
+        let eval = product.evaluateLogicalStock(snapshots: snapshots)
+        XCTAssertTrue(eval.isAvailable, "Any size in Siyah: A2 (Siyah - M) is in stock, so evaluation must be true")
+        XCTAssertEqual(eval.matchingCount, 1)
+        XCTAssertEqual(eval.matchingSnapshots.first?.id, "A2")
+    }
+
+    func testSmartTrackingRuleSelectedSizeInAnyColor() {
+        let variantA = SelectedVariant(id: "A1", title: "Siyah - M", options: [
+            VariantOption(name: "Renk", value: "Siyah"),
+            VariantOption(name: "Beden", value: "M")
+        ], availability: false)
+
+        var product = TrackedProduct(
+            id: UUID(),
+            productName: "Test Kazak",
+            productURL: URL(string: "https://shop.example.com/products/test")!,
+            selectedVariant: variantA,
+            lastChecked: Date(),
+            checkIntervalMinutes: 5,
+            nextCheckDate: Date(),
+            isPaused: false,
+            lastCheckError: nil,
+            lastAvailabilityTransition: nil,
+            provider: .shopify,
+            trackingRule: .selectedSizeInAnyColor,
+            alertCondition: .anyMatching
+        )
+
+        let snapshots = [
+            VariantStockSnapshot(id: "A1", title: "Siyah - M", options: variantA.options, state: .outOfStock, lastChecked: Date()),
+            VariantStockSnapshot(id: "B1", title: "Kırmızı - M", options: [VariantOption(name: "Renk", value: "Kırmızı"), VariantOption(name: "Beden", value: "M")], state: .inStock, lastChecked: Date()),
+            VariantStockSnapshot(id: "A2", title: "Siyah - L", options: [VariantOption(name: "Renk", value: "Siyah"), VariantOption(name: "Beden", value: "L")], state: .inStock, lastChecked: Date())
+        ]
+
+        let eval = product.evaluateLogicalStock(snapshots: snapshots)
+        XCTAssertTrue(eval.isAvailable, "Selected size M in any color: Kırmızı - M is in stock, so evaluation must be true")
+        XCTAssertEqual(eval.matchingCount, 1)
+        XCTAssertEqual(eval.matchingSnapshots.first?.id, "B1")
+    }
+
+    func testSmartTrackingRuleAnyVariant() {
+        let variantA = SelectedVariant(id: "A1", title: "Siyah - S", options: [], availability: false)
+
+        var product = TrackedProduct(
+            id: UUID(),
+            productName: "Test Mont",
+            productURL: URL(string: "https://shop.example.com/products/test")!,
+            selectedVariant: variantA,
+            lastChecked: Date(),
+            checkIntervalMinutes: 5,
+            nextCheckDate: Date(),
+            isPaused: false,
+            lastCheckError: nil,
+            lastAvailabilityTransition: nil,
+            provider: .shopify,
+            trackingRule: .anyVariant,
+            alertCondition: .anyMatching
+        )
+
+        let snapshots = [
+            VariantStockSnapshot(id: "A1", title: "Siyah - S", options: [], state: .outOfStock, lastChecked: Date()),
+            VariantStockSnapshot(id: "C1", title: "Yeşil - XL", options: [], state: .inStock, lastChecked: Date())
+        ]
+
+        let eval = product.evaluateLogicalStock(snapshots: snapshots)
+        XCTAssertTrue(eval.isAvailable)
+        XCTAssertEqual(eval.matchingCount, 1)
+    }
+
+    // MARK: - 6. Smart Alert Conditions Tests
+
+    func testSmartAlertConditionMinimumCount() {
+        let variantA = SelectedVariant(id: "A1", title: "Siyah - S", options: [
+            VariantOption(name: "Renk", value: "Siyah"),
+            VariantOption(name: "Beden", value: "S")
+        ], availability: false)
+
+        var product = TrackedProduct(
+            id: UUID(),
+            productName: "Test Tişört",
+            productURL: URL(string: "https://shop.example.com/products/test")!,
+            selectedVariant: variantA,
+            lastChecked: Date(),
+            checkIntervalMinutes: 5,
+            nextCheckDate: Date(),
+            isPaused: false,
+            lastCheckError: nil,
+            lastAvailabilityTransition: nil,
+            provider: .shopify,
+            trackingRule: .anySizeInSelectedColor,
+            alertCondition: .minimumCount(2)
+        )
+
+        // Only 1 variant in stock -> should evaluate to false
+        let snapshots1 = [
+            VariantStockSnapshot(id: "A1", title: "Siyah - S", options: variantA.options, state: .inStock, lastChecked: Date()),
+            VariantStockSnapshot(id: "A2", title: "Siyah - M", options: [VariantOption(name: "Renk", value: "Siyah"), VariantOption(name: "Beden", value: "M")], state: .outOfStock, lastChecked: Date())
+        ]
+        let eval1 = product.evaluateLogicalStock(snapshots: snapshots1)
+        XCTAssertFalse(eval1.isAvailable, "Threshold is 2, but only 1 matching variant is in stock")
+
+        // 2 variants in stock -> should evaluate to true
+        let snapshots2 = [
+            VariantStockSnapshot(id: "A1", title: "Siyah - S", options: variantA.options, state: .inStock, lastChecked: Date()),
+            VariantStockSnapshot(id: "A2", title: "Siyah - M", options: [VariantOption(name: "Renk", value: "Siyah"), VariantOption(name: "Beden", value: "M")], state: .inStock, lastChecked: Date())
+        ]
+        let eval2 = product.evaluateLogicalStock(snapshots: snapshots2)
+        XCTAssertTrue(eval2.isAvailable, "Threshold of 2 satisfied")
+        XCTAssertEqual(eval2.matchingCount, 2)
+    }
+
+    // MARK: - 7. Restock Burst Mode & Adaptive Policy Tests
+
+    func testRestockBurstModeEffectiveInterval() {
+        let now = Date()
+        let futureBurst = now.addingTimeInterval(1800) // 30 min in future
+
+        // 1. Burst mode active: should return burstIntervalMinutes (e.g. 2 min)
+        let interval = AdaptiveMonitoringPolicy.effectiveIntervalMinutes(
+            baseMinutes: 10,
+            status: .inStock,
+            consecutiveUnchangedChecks: 0,
+            consecutiveFailureChecks: 0,
+            isEnabled: true,
+            burstExpiresAt: futureBurst,
+            burstIntervalMinutes: 2
+        )
+        XCTAssertEqual(interval, 2, "Burst mode should reduce check interval to 2 minutes")
+
+        // 2. Failure backoff precedence: consecutiveFailureChecks >= 3 must override burst mode
+        let failInterval = AdaptiveMonitoringPolicy.effectiveIntervalMinutes(
+            baseMinutes: 10,
+            status: .error,
+            consecutiveUnchangedChecks: 0,
+            consecutiveFailureChecks: 3,
+            isEnabled: true,
+            burstExpiresAt: futureBurst,
+            burstIntervalMinutes: 2
+        )
+        XCTAssertEqual(failInterval, 20, "Failure backoff must take precedence over burst mode")
+
+        // 3. Expired burst mode: restores normal interval
+        let pastBurst = now.addingTimeInterval(-60)
+        let normalInterval = AdaptiveMonitoringPolicy.effectiveIntervalMinutes(
+            baseMinutes: 10,
+            status: .inStock,
+            consecutiveUnchangedChecks: 0,
+            consecutiveFailureChecks: 0,
+            isEnabled: true,
+            burstExpiresAt: pastBurst,
+            burstIntervalMinutes: 2
+        )
+        XCTAssertEqual(normalInterval, 10, "Expired burst mode should restore base interval")
+    }
+
+    // MARK: - 8. Provider Health 0 Products Test
+
+    func testProviderHealthSummaryZeroProducts() {
+        let emptyProducts: [TrackedProduct] = []
+        let summaries = ProviderHealthSummary.allSummaries(for: emptyProducts, isNetworkAvailable: true)
+
+        for summary in summaries {
+            XCTAssertEqual(summary.productCount, 0)
+            XCTAssertEqual(summary.health, .notTracked)
+            XCTAssertEqual(summary.health.title, "Takip edilmiyor")
+        }
+    }
+
+    // MARK: - 9. Backward Compatibility & Persistence Tests
+
+    func testSavedTrackedProductBackwardCompatibility() throws {
+        // JSON representing a legacy TrackedProduct without smart tracking and burst fields
+        let legacyJSON = """
+        {
+            "id": "E621E1F8-C36C-495A-93FC-0C247A3E6E5F",
+            "productName": "Eski Format Ürün",
+            "productURL": "https://www.zara.com/tr/tr/test-p12345.html",
+            "selectedVariant": {
+                "id": "999",
+                "title": "M",
+                "options": [],
+                "availability": false
+            },
+            "checkIntervalMinutes": 5,
+            "isPaused": false,
+            "provider": "zara",
+            "events": []
+        }
+        """.data(using: .utf8)!
+
+        let decoder = JSONDecoder()
+        let saved = try decoder.decode(SavedTrackedProduct.self, from: legacyJSON)
+        let product = saved.toTrackedProduct()
+
+        XCTAssertEqual(product.productName, "Eski Format Ürün")
+        XCTAssertEqual(product.trackingRule, .exactVariant, "Legacy save must default to exactVariant")
+        XCTAssertEqual(product.alertCondition, .anyMatching, "Legacy save must default to anyMatching")
+        XCTAssertNil(product.verificationPreference)
+        XCTAssertNil(product.burstPreference)
+        XCTAssertFalse(product.isBurstActive)
+    }
+
+    func testExportProductBackupRoundTrip() throws {
+        var product = TrackedProduct(
+            id: UUID(),
+            productName: "Gelişmiş Takip Ürünü",
+            productURL: URL(string: "https://www.bershka.com/tr/test.html")!,
+            selectedVariant: SelectedVariant(id: "123", title: "M", options: [], availability: true),
+            lastChecked: Date(),
+            checkIntervalMinutes: 10,
+            nextCheckDate: Date().addingTimeInterval(600),
+            isPaused: false,
+            lastCheckError: nil,
+            lastAvailabilityTransition: nil,
+            provider: .bershka,
+            trackingRule: .anySizeInSelectedColor,
+            alertCondition: .minimumCount(3)
+        )
+        product.verificationPreference = .twoConfirmations
+        product.burstPreference = true
+
+        let exportItem = StockPingExportProduct(from: product)
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(exportItem)
+
+        let decoder = JSONDecoder()
+        let importedItem = try decoder.decode(StockPingExportProduct.self, from: data)
+        let restoredProduct = importedItem.trackedProduct
+
+        XCTAssertEqual(restoredProduct.trackingRule, .anySizeInSelectedColor)
+        XCTAssertEqual(restoredProduct.alertCondition, .minimumCount(3))
+        XCTAssertEqual(restoredProduct.verificationPreference, .twoConfirmations)
+        XCTAssertEqual(restoredProduct.burstPreference, true)
+    }
 }

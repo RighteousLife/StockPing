@@ -32,6 +32,10 @@ struct StockPingExportProduct: Codable {
     var notificationProfile: NotificationProfile?
     var autoOpenOnRestock: Bool?
     var variantSnapshots: [VariantStockSnapshot]?
+    var trackingRule: SmartTrackingRule?
+    var alertCondition: SmartAlertCondition?
+    var verificationPreference: RestockVerificationMode?
+    var burstPreference: Bool?
 
     init(from product: TrackedProduct) {
         self.id = product.id
@@ -54,6 +58,10 @@ struct StockPingExportProduct: Codable {
         self.notificationProfile = product.notificationProfile == .standard ? nil : product.notificationProfile
         self.autoOpenOnRestock = product.autoOpenOnRestock
         self.variantSnapshots = product.variantSnapshots
+        self.trackingRule = product.trackingRule == .exactVariant ? nil : product.trackingRule
+        self.alertCondition = product.alertCondition == .anyMatching ? nil : product.alertCondition
+        self.verificationPreference = product.verificationPreference
+        self.burstPreference = product.burstPreference
     }
 
     var trackedProduct: TrackedProduct {
@@ -85,7 +93,11 @@ struct StockPingExportProduct: Codable {
             isEmailNotificationEnabled: isEmailNotificationEnabled ?? true,
             notificationProfile: notificationProfile ?? .standard,
             autoOpenOnRestock: autoOpenOnRestock,
-            variantSnapshots: variantSnapshots
+            variantSnapshots: variantSnapshots,
+            trackingRule: trackingRule ?? .exactVariant,
+            alertCondition: alertCondition ?? .anyMatching,
+            verificationPreference: verificationPreference,
+            burstPreference: burstPreference
         )
     }
 }

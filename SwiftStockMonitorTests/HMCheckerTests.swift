@@ -183,7 +183,7 @@ final class HMCheckerTests: XCTestCase {
         XCTAssertEqual(warning.health, .warning)
 
         let empty = ProviderHealthSummary.calculate(for: .hm, products: [], isNetworkAvailable: true)
-        XCTAssertEqual(empty.health, .unknown)
+        XCTAssertEqual(empty.health, .notTracked)
     }
 
     // MARK: - 9. Backup & Restore Compatibility
