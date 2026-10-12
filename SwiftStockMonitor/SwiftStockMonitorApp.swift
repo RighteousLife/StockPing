@@ -6087,7 +6087,8 @@ private struct AddProductSheet: View {
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(spacing: 0) {
+                // Header / introduction
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Yeni Ürün Ekle")
                         .font(.title2.weight(.semibold))
@@ -6095,155 +6096,169 @@ private struct AddProductSheet: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+                .padding(.bottom, 12)
 
-                GroupBox("Ürün URL'si") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "link")
-                                .foregroundStyle(.secondary)
-                            TextField("https://shop.example.com/products/...", text: $productURLText)
-                                .textFieldStyle(.plain)
-                                .focused($isURLFieldFocused)
-                                .accessibilityLabel("Ürün URL'si")
-                                .disabled(isAnalyzing)
-                                .onChange(of: productURLText) {
-                                    clearAnalysis()
+                // Scrollable content area
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        GroupBox("Ürün URL'si") {
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "link")
+                                        .foregroundStyle(.secondary)
+                                    TextField("https://shop.example.com/products/...", text: $productURLText)
+                                        .textFieldStyle(.plain)
+                                        .focused($isURLFieldFocused)
+                                        .accessibilityLabel("Ürün URL'si")
+                                        .disabled(isAnalyzing)
+                                        .onChange(of: productURLText) {
+                                            clearAnalysis()
+                                        }
                                 }
-                        }
-                        .padding(.vertical, 7)
-                        .padding(.horizontal, 9)
-                        .background(.background, in: RoundedRectangle(cornerRadius: 7))
-                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(.quaternary, lineWidth: 1))
+                                .padding(.vertical, 7)
+                                .padding(.horizontal, 9)
+                                .background(.background, in: RoundedRectangle(cornerRadius: 7))
+                                .overlay(RoundedRectangle(cornerRadius: 7).stroke(.quaternary, lineWidth: 1))
 
-                        HStack(spacing: 10) {
-                            Button(action: analyzeProduct) {
-                                if isAnalyzing {
-                                    Label("Analiz ediliyor…", systemImage: "hourglass")
-                                } else {
-                                    Label("Ürünü Analiz Et", systemImage: "magnifyingglass")
-                                }
-                            }
-                            .disabled(isAnalyzing || !canAnalyzeURL)
-                            .accessibilityLabel("Ürünü Analiz Et")
-
-                            if isAnalyzing {
-                                ProgressView()
-                                    .controlSize(.small)
-                                    .accessibilityLabel("Ürün analiz ediliyor")
-                            }
-                            Spacer(minLength: 0)
-                        }
-                    }
-                }
-
-                if let analysisError {
-                    Label(analysisError, systemImage: "exclamationmark.triangle.fill")
-                        .font(.callout)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityLabel("Ürün analizi hatası: \(analysisError)")
-                }
-                if let duplicateError {
-                    Label(duplicateError, systemImage: "exclamationmark.circle.fill")
-                        .font(.callout)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                if let productName {
-                    GroupBox {
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack(alignment: .firstTextBaseline) {
-                                Text(productName)
-                                    .font(.headline)
-                                    .lineLimit(2)
-                                    .truncationMode(.tail)
-                                Spacer(minLength: 8)
-                                Text(provider.displayName)
-                                    .font(.caption.weight(.medium))
-                                    .foregroundStyle(.secondary)
-                                    .padding(.horizontal, 7)
-                                    .padding(.vertical, 3)
-                                    .background(.quaternary, in: Capsule())
-                            }
-
-                            Divider()
-
-                            HStack(spacing: 12) {
-                                if let filterDim = filterDimension {
-                                    Picker(filterDim.name, selection: $selectedFilterOptionValue) {
-                                        Text("Tüm \(filterDim.name)ler (\(variants.count))").tag("all")
-                                        ForEach(filterDim.values, id: \.self) { val in
-                                            let count = variants.filter { c in
-                                                c.variant.options.contains { $0.name == filterDim.name && $0.value == val }
-                                            }.count
-                                            Text("\(val) (\(count))").tag(val)
+                                HStack(spacing: 10) {
+                                    Button(action: analyzeProduct) {
+                                        if isAnalyzing {
+                                            Label("Analiz ediliyor…", systemImage: "hourglass")
+                                        } else {
+                                            Label("Ürünü Analiz Et", systemImage: "magnifyingglass")
                                         }
                                     }
-                                    .pickerStyle(.menu)
-                                    .frame(maxWidth: 180)
-                                }
+                                    .disabled(isAnalyzing || !canAnalyzeURL)
+                                    .accessibilityLabel("Ürünü Analiz Et")
 
-                                Spacer(minLength: 0)
-
-                                Button("Tümünü Seç") {
-                                    let selectable = visibleVariants.filter { !isCandidateAlreadyTracked($0) }.map(\.id)
-                                    selectedVariantIDs.formUnion(selectable)
-                                }
-                                .buttonStyle(.link)
-                                .font(.caption)
-                                .disabled(visibleVariants.allSatisfy { isCandidateAlreadyTracked($0) })
-
-                                Text("·")
-                                    .foregroundStyle(.tertiary)
-
-                                Button("Seçimi Temizle") {
-                                    let visibleIDs = Set(visibleVariants.map(\.id))
-                                    selectedVariantIDs.subtract(visibleIDs)
-                                }
-                                .buttonStyle(.link)
-                                .font(.caption)
-                                .disabled(selectedVariantIDs.isEmpty)
-                            }
-
-                            ScrollView {
-                                VStack(spacing: 2) {
-                                    ForEach(visibleVariants) { candidate in
-                                        candidateRow(candidate)
+                                    if isAnalyzing {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                            .accessibilityLabel("Ürün analiz ediliyor")
                                     }
+                                    Spacer(minLength: 0)
+                                }
+                            }
+                        }
+
+                        if let analysisError {
+                            Label(analysisError, systemImage: "exclamationmark.triangle.fill")
+                                .font(.callout)
+                                .foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityLabel("Ürün analizi hatası: \(analysisError)")
+                        }
+                        if let duplicateError {
+                            Label(duplicateError, systemImage: "exclamationmark.circle.fill")
+                                .font(.callout)
+                                .foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        if let productName {
+                            GroupBox {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    HStack(alignment: .firstTextBaseline) {
+                                        Text(productName)
+                                            .font(.headline)
+                                            .lineLimit(2)
+                                            .truncationMode(.tail)
+                                        Spacer(minLength: 8)
+                                        Text(provider.displayName)
+                                            .font(.caption.weight(.medium))
+                                            .foregroundStyle(.secondary)
+                                            .padding(.horizontal, 7)
+                                            .padding(.vertical, 3)
+                                            .background(.quaternary, in: Capsule())
+                                    }
+
+                                    Divider()
+
+                                    HStack(spacing: 12) {
+                                        if let filterDim = filterDimension {
+                                            Picker(filterDim.name, selection: $selectedFilterOptionValue) {
+                                                Text("Tüm \(filterDim.name)ler (\(variants.count))").tag("all")
+                                                ForEach(filterDim.values, id: \.self) { val in
+                                                    let count = variants.filter { c in
+                                                        c.variant.options.contains { $0.name == filterDim.name && $0.value == val }
+                                                    }.count
+                                                    Text("\(val) (\(count))").tag(val)
+                                                }
+                                            }
+                                            .pickerStyle(.menu)
+                                            .frame(maxWidth: 180)
+                                        }
+
+                                        Spacer(minLength: 0)
+
+                                        Button("Tümünü Seç") {
+                                            let selectable = visibleVariants.filter { !isCandidateAlreadyTracked($0) }.map(\.id)
+                                            selectedVariantIDs.formUnion(selectable)
+                                        }
+                                        .buttonStyle(.link)
+                                        .font(.caption)
+                                        .disabled(visibleVariants.allSatisfy { isCandidateAlreadyTracked($0) })
+
+                                        Text("·")
+                                            .foregroundStyle(.tertiary)
+
+                                        Button("Seçimi Temizle") {
+                                            let visibleIDs = Set(visibleVariants.map(\.id))
+                                            selectedVariantIDs.subtract(visibleIDs)
+                                        }
+                                        .buttonStyle(.link)
+                                        .font(.caption)
+                                        .disabled(selectedVariantIDs.isEmpty)
+                                    }
+
+                                    ScrollView {
+                                        VStack(spacing: 2) {
+                                            ForEach(visibleVariants) { candidate in
+                                                candidateRow(candidate)
+                                            }
+                                        }
+                                        .padding(4)
+                                    }
+                                    .frame(maxHeight: 180)
+                                    .background(Color(nsColor: .controlBackgroundColor).opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+                                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.15), lineWidth: 1))
+
+                                    Divider()
+
+                                    smartTrackingSelector
                                 }
                                 .padding(4)
                             }
-                            .frame(maxHeight: 180)
-                            .background(Color(nsColor: .controlBackgroundColor).opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
-                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.15), lineWidth: 1))
-
-                            Divider()
-
-                            smartTrackingSelector
                         }
-                        .padding(4)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 4)
+                }
+
+                // Fixed bottom action bar
+                VStack(spacing: 12) {
+                    Divider()
+                    HStack {
+                        Button("İptal") { dismiss() }
+                            .keyboardShortcut(.cancelAction)
+                        Spacer()
+                        let selectedCount = selectedVariantIDs.count
+                        let buttonTitle = selectedCount > 1 ? "\(selectedCount) Varyantı Takibe Ekle" : "Takibe Ekle"
+                        Button(buttonTitle, action: addSelectedProducts)
+                            .buttonStyle(.borderedProminent)
+                            .disabled(selectedVariantIDs.isEmpty || isAnalyzing)
+                            .keyboardShortcut(.defaultAction)
+                            .accessibilityLabel(buttonTitle)
                     }
                 }
-
-                Spacer(minLength: 0)
-
-                Divider()
-                HStack {
-                    Button("İptal") { dismiss() }
-                        .keyboardShortcut(.cancelAction)
-                    Spacer()
-                    let selectedCount = selectedVariantIDs.count
-                    let buttonTitle = selectedCount > 1 ? "\(selectedCount) Varyantı Takibe Ekle" : "Takibe Ekle"
-                    Button(buttonTitle, action: addSelectedProducts)
-                        .buttonStyle(.borderedProminent)
-                        .disabled(selectedVariantIDs.isEmpty || isAnalyzing)
-                        .keyboardShortcut(.defaultAction)
-                        .accessibilityLabel(buttonTitle)
-                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 16)
+                .padding(.top, 8)
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .navigationTitle("Yeni Ürün Ekle")
             .background {
                 if let analysisURL {
@@ -6265,7 +6280,7 @@ private struct AddProductSheet: View {
                 }
             }
         }
-        .frame(minWidth: 480, idealWidth: 540, maxWidth: 640, minHeight: 460, idealHeight: 520)
+        .frame(minWidth: 480, idealWidth: 540, maxWidth: 640, minHeight: 480, idealHeight: 560, maxHeight: 720)
         .onAppear {
             isURLFieldFocused = true
         }
