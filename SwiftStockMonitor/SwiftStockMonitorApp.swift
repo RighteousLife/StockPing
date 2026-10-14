@@ -59,7 +59,6 @@ struct SwiftStockMonitorApp: App {
 
         Settings {
             SettingsView()
-                .background(SettingsWindowConfigurator())
         }
         .defaultSize(width: 760, height: 650)
         .windowResizability(.contentMinSize)
@@ -171,6 +170,8 @@ final class MainWindowController: ObservableObject {
         }
     }
 
+    private var windowObservers: [NSObjectProtocol] = []
+
     func attach(to window: NSWindow) {
         if mainWindow === window {
             if let closeDelegateProxy,
@@ -181,28 +182,78 @@ final class MainWindowController: ObservableObject {
             return
         }
 
+        for token in windowObservers {
+            NotificationCenter.default.removeObserver(token)
+        }
+        windowObservers.removeAll()
+
         let proxy = CloseToHideWindowDelegate(forwarding: window.delegate, controller: self)
         closeDelegateProxy = proxy
         mainWindow = window
         window.delegate = proxy
         configureTitlebarAppearance(for: window)
+
+        let t1 = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object: window,
+            queue: .main
+        ) { [weak self, weak window] _ in
+            guard let self, let window else { return }
+            self.configureTitlebarAppearance(for: window)
+        }
+        let t2 = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification,
+            object: window,
+            queue: .main
+        ) { [weak self, weak window] _ in
+            guard let self, let window else { return }
+            self.configureTitlebarAppearance(for: window)
+        }
+        let t3 = NotificationCenter.default.addObserver(
+            forName: NSWindow.didUpdateNotification,
+            object: window,
+            queue: .main
+        ) { [weak self, weak window] _ in
+            guard let self, let window else { return }
+            self.configureTitlebarAppearance(for: window)
+        }
+        let t4 = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self, weak window] _ in
+            guard let self, let window else { return }
+            self.configureTitlebarAppearance(for: window)
+        }
+        windowObservers = [t1, t2, t3, t4]
     }
 
     func configureTitlebarAppearance(for window: NSWindow) {
+        if window.appearance != nil {
+            window.appearance = nil
+        }
         resetTitlebarViewAppearances(in: window.contentView?.superview)
     }
 
     private func resetTitlebarViewAppearances(in root: NSView?) {
         guard let root else { return }
+        func clearAppearances(in view: NSView) {
+            if view.appearance != nil {
+                view.appearance = nil
+            }
+            for subview in view.subviews {
+                clearAppearances(in: subview)
+            }
+        }
+
         var stack = [root]
         while let view = stack.popLast() {
             let className = NSStringFromClass(type(of: view))
-            if className.contains("ToolbarView") || className.contains("TitlebarView") || className.contains("TitlebarContainer") {
-                if view.appearance != nil {
-                    view.appearance = nil
-                }
+            if className.contains("Titlebar") || className.contains("Toolbar") {
+                clearAppearances(in: view)
+            } else {
+                stack.append(contentsOf: view.subviews)
             }
-            stack.append(contentsOf: view.subviews)
         }
     }
 
@@ -6155,53 +6206,105 @@ private extension View {
             .scrollBounceBehavior(.basedOnSize)
             .frame(maxWidth: 640)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(SettingsWindowConfigurator())
     }
 }
 
 private struct SettingsWindowConfigurator: NSViewRepresentable {
-    func makeNSView(context: Context) -> WindowObserverView {
-        let view = WindowObserverView()
-        view.onWindowAvailable = { window in
-            Self.configure(window)
-            DispatchQueue.main.async {
-                Self.configure(window)
-            }
-            NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: .main) { _ in
-                DispatchQueue.main.async {
-                    Self.configure(window)
-                }
-            }
-            NotificationCenter.default.addObserver(forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main) { _ in
-                DispatchQueue.main.async {
-                    Self.configure(window)
-                }
-            }
-            NotificationCenter.default.addObserver(forName: NSWindow.didUpdateNotification, object: window, queue: .main) { [weak window] _ in
-                DispatchQueue.main.async {
-                    if let window, !window.styleMask.contains(.resizable) {
-                        Self.configure(window)
-                    }
-                }
-            }
-        }
-        return view
+    func makeNSView(context: Context) -> SettingsWindowObserverView {
+        SettingsWindowObserverView()
     }
 
-    private static func configure(_ window: NSWindow) {
+    func updateNSView(_ nsView: SettingsWindowObserverView, context: Context) {
+        nsView.reconfigure()
+    }
+}
+
+private final class SettingsWindowObserverView: NSView {
+    private var observerTokens: [NSObjectProtocol] = []
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        clearObservers()
+        guard let window else { return }
+        Self.configure(window)
+
+        DispatchQueue.main.async { [weak window] in
+            guard let window else { return }
+            Self.configure(window)
+        }
+
+        let t1 = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification,
+            object: window,
+            queue: .main
+        ) { [weak window] _ in
+            guard let window else { return }
+            Self.configure(window)
+        }
+        let t2 = NotificationCenter.default.addObserver(
+            forName: NSWindow.didUpdateNotification,
+            object: window,
+            queue: .main
+        ) { [weak window] _ in
+            guard let window else { return }
+            Self.configure(window)
+        }
+        observerTokens = [t1, t2]
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil {
+            clearObservers()
+        }
+    }
+
+    deinit {
+        clearObservers()
+    }
+
+    func reconfigure() {
+        if let window {
+            Self.configure(window)
+        }
+    }
+
+    private func clearObservers() {
+        for token in observerTokens {
+            NotificationCenter.default.removeObserver(token)
+        }
+        observerTokens.removeAll()
+    }
+
+    static func configure(_ window: NSWindow) {
         if !window.styleMask.contains(.resizable) {
             window.styleMask.insert(.resizable)
+        }
+        if window.toolbarStyle != .unified {
+            window.toolbarStyle = .unified
+        }
+        if !window.titlebarAppearsTransparent {
+            window.titlebarAppearsTransparent = true
+        }
+        if window.toolbar?.showsBaselineSeparator == true {
+            window.toolbar?.showsBaselineSeparator = false
         }
         window.minSize = NSSize(width: 620, height: 520)
         window.maxSize = NSSize(width: 1100, height: 850)
         window.contentMinSize = NSSize(width: 620, height: 520)
         window.contentMaxSize = NSSize(width: 1100, height: 850)
         window.standardWindowButton(.zoomButton)?.isEnabled = true
-    }
 
-    func updateNSView(_ view: WindowObserverView, context: Context) {
-        if let window = view.window {
-            Self.configure(window)
+        if let titlebarContainer = window.contentView?.superview?.subviews.first(where: { NSStringFromClass(type(of: $0)).contains("TitlebarContainer") }) {
+            var stack = [titlebarContainer]
+            while let view = stack.popLast() {
+                if NSStringFromClass(type(of: view)).contains("Decoration") {
+                    if !view.isHidden {
+                        view.isHidden = true
+                    }
+                }
+                stack.append(contentsOf: view.subviews)
+            }
         }
     }
 }
