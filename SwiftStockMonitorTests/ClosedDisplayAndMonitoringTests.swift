@@ -523,4 +523,188 @@ final class ClosedDisplayAndMonitoringTests: XCTestCase {
         XCTAssertEqual(restoredProduct.verificationPreference, .twoConfirmations)
         XCTAssertEqual(restoredProduct.burstPreference, true)
     }
+
+    // MARK: - 10. Product List Empty State Resolution Tests
+
+    func testEmptyStateWhenNoProductsExist() {
+        let state = ProductListEmptyState.resolve(
+            totalProductCount: 0,
+            searchText: "",
+            statusFilter: .all
+        )
+        XCTAssertEqual(state.title, "Takip Edilen Ürün Yok")
+        XCTAssertEqual(state.systemImage, "shippingbox")
+        XCTAssertEqual(state.actionType, .addProduct)
+        XCTAssertEqual(state.actionTitle, "Ürün Ekle")
+    }
+
+    func testEmptyStateWhenSearchYieldsNoResults() {
+        let state = ProductListEmptyState.resolve(
+            totalProductCount: 10,
+            searchText: "Kırmızı Triko",
+            statusFilter: .all
+        )
+        XCTAssertEqual(state.title, "Sonuç Bulunamadı")
+        XCTAssertEqual(state.systemImage, "magnifyingglass")
+        XCTAssertEqual(state.actionType, .clearSearch)
+        XCTAssertTrue(state.description.contains("Kırmızı Triko"))
+    }
+
+    func testEmptyStateWhenStatusFilterHasNoMatches() {
+        let errorState = ProductListEmptyState.resolve(
+            totalProductCount: 5,
+            searchText: "",
+            statusFilter: .error
+        )
+        XCTAssertEqual(errorState.title, "Hatalı Ürün Yok")
+        XCTAssertEqual(errorState.systemImage, "exclamationmark.triangle")
+        XCTAssertEqual(errorState.actionType, .clearFilters)
+
+        let inStockState = ProductListEmptyState.resolve(
+            totalProductCount: 5,
+            searchText: "",
+            statusFilter: .inStock
+        )
+        XCTAssertEqual(inStockState.title, "Stokta Ürün Yok")
+        XCTAssertEqual(inStockState.systemImage, "checkmark.circle")
+        XCTAssertEqual(inStockState.actionType, .clearFilters)
+
+        let outOfStockState = ProductListEmptyState.resolve(
+            totalProductCount: 5,
+            searchText: "",
+            statusFilter: .outOfStock
+        )
+        XCTAssertEqual(outOfStockState.title, "Tükendi Durumunda Ürün Yok")
+        XCTAssertEqual(outOfStockState.actionType, .clearFilters)
+    }
+
+    func testEmptyStateWhenProviderGroupOrTagFilterHasNoMatches() {
+        let providerState = ProductListEmptyState.resolve(
+            totalProductCount: 5,
+            searchText: "",
+            statusFilter: .all,
+            providerFilter: .zara
+        )
+        XCTAssertEqual(providerState.title, "Zara Ürünü Yok")
+        XCTAssertEqual(providerState.actionType, .clearFilters)
+
+        let groupState = ProductListEmptyState.resolve(
+            totalProductCount: 5,
+            searchText: "",
+            statusFilter: .all,
+            groupFilter: "Favoriler"
+        )
+        XCTAssertEqual(groupState.title, "'Favoriler' Grubunda Ürün Yok")
+        XCTAssertEqual(groupState.actionType, .clearFilters)
+
+        let tagState = ProductListEmptyState.resolve(
+            totalProductCount: 5,
+            searchText: "",
+            statusFilter: .all,
+            tagFilter: "İndirim"
+        )
+        XCTAssertEqual(tagState.title, "'#İndirim' Etiketli Ürün Yok")
+        XCTAssertEqual(tagState.actionType, .clearFilters)
+    }
+
+    // MARK: - 11. Product Scheduling Description Tests
+
+    func testSchedulingDescriptionGlobalPaused() {
+        let description = ProductSchedulingDescription.describe(
+            isGlobalMonitoringPaused: true,
+            isProductPaused: false,
+            isChecking: false,
+            automaticCheckingEnabled: true,
+            lastChecked: Date(),
+            nextCheckDate: Date().addingTimeInterval(120)
+        )
+        XCTAssertEqual(description, "Taramalar duraklatıldı")
+    }
+
+    func testSchedulingDescriptionProductPaused() {
+        let description = ProductSchedulingDescription.describe(
+            isGlobalMonitoringPaused: false,
+            isProductPaused: true,
+            isChecking: false,
+            automaticCheckingEnabled: true,
+            lastChecked: Date(),
+            nextCheckDate: Date().addingTimeInterval(120)
+        )
+        XCTAssertEqual(description, "İzleme duraklatıldı")
+    }
+
+    func testSchedulingDescriptionCurrentlyChecking() {
+        let description = ProductSchedulingDescription.describe(
+            isGlobalMonitoringPaused: false,
+            isProductPaused: false,
+            isChecking: true,
+            automaticCheckingEnabled: true,
+            lastChecked: Date(),
+            nextCheckDate: Date().addingTimeInterval(120)
+        )
+        XCTAssertEqual(description, "Kontrol ediliyor...")
+    }
+
+    func testSchedulingDescriptionAutomaticCheckingDisabled() {
+        let description = ProductSchedulingDescription.describe(
+            isGlobalMonitoringPaused: false,
+            isProductPaused: false,
+            isChecking: false,
+            automaticCheckingEnabled: false,
+            lastChecked: Date(),
+            nextCheckDate: Date().addingTimeInterval(120)
+        )
+        XCTAssertEqual(description, "Otomatik kontrol kapalı")
+    }
+
+    func testSchedulingDescriptionDueNow() {
+        let now = Date()
+        let description = ProductSchedulingDescription.describe(
+            isGlobalMonitoringPaused: false,
+            isProductPaused: false,
+            isChecking: false,
+            automaticCheckingEnabled: true,
+            lastChecked: now.addingTimeInterval(-300),
+            nextCheckDate: now.addingTimeInterval(-5),
+            now: now
+        )
+        XCTAssertEqual(description, "Kontrol sırada")
+    }
+
+    func testSchedulingDescriptionCountingDown() {
+        let now = Date()
+        let inSeconds = ProductSchedulingDescription.describe(
+            isGlobalMonitoringPaused: false,
+            isProductPaused: false,
+            isChecking: false,
+            automaticCheckingEnabled: true,
+            lastChecked: now.addingTimeInterval(-60),
+            nextCheckDate: now.addingTimeInterval(45),
+            now: now
+        )
+        XCTAssertEqual(inSeconds, "45 sn")
+
+        let inMinutesExact = ProductSchedulingDescription.describe(
+            isGlobalMonitoringPaused: false,
+            isProductPaused: false,
+            isChecking: false,
+            automaticCheckingEnabled: true,
+            lastChecked: now.addingTimeInterval(-60),
+            nextCheckDate: now.addingTimeInterval(180),
+            now: now
+        )
+        XCTAssertEqual(inMinutesExact, "3 dk")
+
+        let inMinutesAndSeconds = ProductSchedulingDescription.describe(
+            isGlobalMonitoringPaused: false,
+            isProductPaused: false,
+            isChecking: false,
+            automaticCheckingEnabled: true,
+            lastChecked: now.addingTimeInterval(-60),
+            nextCheckDate: now.addingTimeInterval(150),
+            now: now
+        )
+        XCTAssertEqual(inMinutesAndSeconds, "2 dk 30 sn")
+    }
 }
+

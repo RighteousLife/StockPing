@@ -1630,3 +1630,209 @@ struct MonitoringSchedule: Codable, Hashable, Sendable {
     }
 }
 
+// MARK: - Product List Filtering, Sorting & Empty State Helpers
+
+enum ProductListFilter: String, CaseIterable, Identifiable, Sendable {
+    case all, inStock, outOfStock, checking, error, paused, priority, burst, recentRestock, noGroup
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .all: "Tümü"
+        case .inStock: "Stokta"
+        case .outOfStock: "Stokta değil"
+        case .checking: "Kontrol ediliyor"
+        case .error: "Kontrol sorunu"
+        case .paused: "Duraklatıldı"
+        case .priority: "Öncelikli"
+        case .burst: "Burst modunda"
+        case .recentRestock: "Yakın zamanda restock"
+        case .noGroup: "Grupsuz"
+        }
+    }
+}
+
+enum ProductListSort: String, CaseIterable, Identifiable, Sendable {
+    case defaultOrder, priorityFirst, productName, lastChecked, nextCheck
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .defaultOrder: "Varsayılan sıra"
+        case .priorityFirst: "Öncelikliler başta"
+        case .productName: "Ürün adı"
+        case .lastChecked: "Son kontrol"
+        case .nextCheck: "Sonraki kontrol"
+        }
+    }
+}
+
+enum ProductListEmptyStateAction: Equatable, Sendable {
+    case addProduct
+    case clearSearch
+    case clearFilters
+}
+
+struct ProductListEmptyState: Equatable, Sendable {
+    let title: String
+    let systemImage: String
+    let description: String
+    let actionTitle: String
+    let actionType: ProductListEmptyStateAction
+
+    static func resolve(
+        totalProductCount: Int,
+        searchText: String,
+        statusFilter: ProductListFilter,
+        providerFilter: StoreProvider? = nil,
+        groupFilter: String? = nil,
+        tagFilter: String? = nil
+    ) -> ProductListEmptyState {
+        if totalProductCount == 0 {
+            return ProductListEmptyState(
+                title: "Takip Edilen Ürün Yok",
+                systemImage: "shippingbox",
+                description: "Bir ürün ekleyerek stok takibine başlayın.",
+                actionTitle: "Ürün Ekle",
+                actionType: .addProduct
+            )
+        }
+
+        let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedSearch.isEmpty {
+            return ProductListEmptyState(
+                title: "Sonuç Bulunamadı",
+                systemImage: "magnifyingglass",
+                description: "'\(trimmedSearch)' aramasıyla eşleşen ürün bulunamadı.",
+                actionTitle: "Aramayı Temizle",
+                actionType: .clearSearch
+            )
+        }
+
+        if statusFilter != .all {
+            let filterName: String
+            let iconName: String
+            switch statusFilter {
+            case .all:
+                filterName = "Ürün"
+                iconName = "line.3.horizontal.decrease.circle"
+            case .inStock:
+                filterName = "Stokta Ürün"
+                iconName = "checkmark.circle"
+            case .outOfStock:
+                filterName = "Tükendi Durumunda Ürün"
+                iconName = "xmark.circle"
+            case .checking:
+                filterName = "Kontrol Edilen Ürün"
+                iconName = "arrow.triangle.2.circlepath"
+            case .error:
+                filterName = "Hatalı Ürün"
+                iconName = "exclamationmark.triangle"
+            case .paused:
+                filterName = "Duraklatılmış Ürün"
+                iconName = "pause.circle"
+            case .priority:
+                filterName = "Öncelikli Ürün"
+                iconName = "star"
+            case .burst:
+                filterName = "Burst Modunda Ürün"
+                iconName = "bolt"
+            case .recentRestock:
+                filterName = "Yeni Restock Olan Ürün"
+                iconName = "bell.badge"
+            case .noGroup:
+                filterName = "Grupsuz Ürün"
+                iconName = "folder.badge.minus"
+            }
+            return ProductListEmptyState(
+                title: "\(filterName) Yok",
+                systemImage: iconName,
+                description: "Şu anda bu filtre ölçütüne uygun takip edilen ürün bulunmuyor.",
+                actionTitle: "Filtreleri Temizle",
+                actionType: .clearFilters
+            )
+        }
+
+        if let provider = providerFilter {
+            return ProductListEmptyState(
+                title: "\(provider.displayName) Ürünü Yok",
+                systemImage: "storefront",
+                description: "Seçili mağazaya ait takip edilen ürün bulunmuyor.",
+                actionTitle: "Filtreleri Temizle",
+                actionType: .clearFilters
+            )
+        }
+
+        if let group = groupFilter, !group.isEmpty {
+            return ProductListEmptyState(
+                title: "'\(group)' Grubunda Ürün Yok",
+                systemImage: "folder",
+                description: "Bu grupta takip edilen ürün bulunmuyor.",
+                actionTitle: "Filtreleri Temizle",
+                actionType: .clearFilters
+            )
+        }
+
+        if let tag = tagFilter, !tag.isEmpty {
+            return ProductListEmptyState(
+                title: "'#\(tag)' Etiketli Ürün Yok",
+                systemImage: "tag",
+                description: "Bu etikete sahip takip edilen ürün bulunmuyor.",
+                actionTitle: "Filtreleri Temizle",
+                actionType: .clearFilters
+            )
+        }
+
+        return ProductListEmptyState(
+            title: "Filtreye Uygun Ürün Yok",
+            systemImage: "line.3.horizontal.decrease.circle",
+            description: "Mevcut filtre ölçütlerine uygun ürün bulunamadı.",
+            actionTitle: "Filtreleri Temizle",
+            actionType: .clearFilters
+        )
+    }
+}
+
+// MARK: - Product Scheduling Description Helper
+
+struct ProductSchedulingDescription: Sendable {
+    static func describe(
+        isGlobalMonitoringPaused: Bool,
+        isProductPaused: Bool,
+        isChecking: Bool,
+        automaticCheckingEnabled: Bool,
+        lastChecked: Date?,
+        nextCheckDate: Date?,
+        now: Date = Date()
+    ) -> String {
+        if isGlobalMonitoringPaused {
+            return "Taramalar duraklatıldı"
+        }
+        if isProductPaused {
+            return "İzleme duraklatıldı"
+        }
+        if isChecking {
+            return "Kontrol ediliyor..."
+        }
+        guard automaticCheckingEnabled else {
+            return "Otomatik kontrol kapalı"
+        }
+        guard lastChecked != nil, let nextCheckDate else {
+            return "Henüz kontrol planlanmadı"
+        }
+        let seconds = Int(nextCheckDate.timeIntervalSince(now).rounded(.up))
+        guard seconds > 0 else {
+            return "Kontrol sırada"
+        }
+        if seconds < 60 {
+            return "\(seconds) sn"
+        }
+        let minutes = seconds / 60
+        let remainder = seconds % 60
+        return remainder == 0 ? "\(minutes) dk" : "\(minutes) dk \(remainder) sn"
+    }
+}
+
+

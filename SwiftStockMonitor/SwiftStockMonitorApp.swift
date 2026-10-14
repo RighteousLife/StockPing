@@ -6,43 +6,6 @@ import ServiceManagement
 import Combine
 import Network
 
-private enum ProductListFilter: String, CaseIterable, Identifiable {
-    case all, inStock, outOfStock, checking, error, paused, priority, burst, recentRestock, noGroup
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .all: "Tümü"
-        case .inStock: "Stokta"
-        case .outOfStock: "Stokta değil"
-        case .checking: "Kontrol ediliyor"
-        case .error: "Kontrol sorunu"
-        case .paused: "Duraklatıldı"
-        case .priority: "Öncelikli"
-        case .burst: "Burst modunda"
-        case .recentRestock: "Yakın zamanda restock"
-        case .noGroup: "Grupsuz"
-        }
-    }
-}
-
-private enum ProductListSort: String, CaseIterable, Identifiable {
-    case defaultOrder, priorityFirst, productName, lastChecked, nextCheck
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .defaultOrder: "Varsayılan sıra"
-        case .priorityFirst: "Öncelikliler başta"
-        case .productName: "Ürün adı"
-        case .lastChecked: "Son kontrol"
-        case .nextCheck: "Sonraki kontrol"
-        }
-    }
-}
-
 extension Notification.Name {
     static let exportBackupRequested = Notification.Name("exportBackupRequested")
     static let importBackupRequested = Notification.Name("importBackupRequested")
@@ -214,6 +177,7 @@ final class MainWindowController: ObservableObject {
                (window.delegate as AnyObject?) !== closeDelegateProxy {
                 window.delegate = closeDelegateProxy
             }
+            configureTitlebarAppearance(for: window)
             return
         }
 
@@ -221,6 +185,25 @@ final class MainWindowController: ObservableObject {
         closeDelegateProxy = proxy
         mainWindow = window
         window.delegate = proxy
+        configureTitlebarAppearance(for: window)
+    }
+
+    func configureTitlebarAppearance(for window: NSWindow) {
+        resetTitlebarViewAppearances(in: window.contentView?.superview)
+    }
+
+    private func resetTitlebarViewAppearances(in root: NSView?) {
+        guard let root else { return }
+        var stack = [root]
+        while let view = stack.popLast() {
+            let className = NSStringFromClass(type(of: view))
+            if className.contains("ToolbarView") || className.contains("TitlebarView") || className.contains("TitlebarContainer") {
+                if view.appearance != nil {
+                    view.appearance = nil
+                }
+            }
+            stack.append(contentsOf: view.subviews)
+        }
     }
 
     @discardableResult
@@ -237,6 +220,7 @@ final class MainWindowController: ObservableObject {
         }
         targetWindow.orderFront(nil)
         targetWindow.makeKeyAndOrderFront(nil)
+        configureTitlebarAppearance(for: targetWindow)
         NSApplication.shared.activate(ignoringOtherApps: true)
         return true
     }
@@ -268,8 +252,38 @@ final class CloseToHideWindowDelegate: NSObject, NSWindowDelegate {
         return false
     }
 
+    func windowDidUpdate(_ notification: Notification) {
+        if let window = notification.object as? NSWindow {
+            controller?.configureTitlebarAppearance(for: window)
+        }
+        if originalDelegateResponds(to: #selector(NSWindowDelegate.windowDidUpdate(_:))) {
+            downstreamDelegate?.windowDidUpdate?(notification)
+        }
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        if let window = notification.object as? NSWindow {
+            controller?.configureTitlebarAppearance(for: window)
+        }
+        if originalDelegateResponds(to: #selector(NSWindowDelegate.windowDidBecomeKey(_:))) {
+            downstreamDelegate?.windowDidBecomeKey?(notification)
+        }
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        if let window = notification.object as? NSWindow {
+            controller?.configureTitlebarAppearance(for: window)
+        }
+        if originalDelegateResponds(to: #selector(NSWindowDelegate.windowDidResignKey(_:))) {
+            downstreamDelegate?.windowDidResignKey?(notification)
+        }
+    }
+
     override func responds(to selector: Selector!) -> Bool {
-        if selector == #selector(NSWindowDelegate.windowShouldClose(_:)) {
+        if selector == #selector(NSWindowDelegate.windowShouldClose(_:)) ||
+           selector == #selector(NSWindowDelegate.windowDidUpdate(_:)) ||
+           selector == #selector(NSWindowDelegate.windowDidBecomeKey(_:)) ||
+           selector == #selector(NSWindowDelegate.windowDidResignKey(_:)) {
             return true
         }
 
@@ -968,12 +982,72 @@ struct ContentView: View {
             detailPane
         }
         .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
+            ToolbarItem(placement: .primaryAction) {
                 selectionToolbarControls
-                actionToolbarControls
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showingDashboard.toggle()
+                } label: {
+                    Label("Genel Özet", systemImage: showingDashboard ? "gauge.with.dots.needle.bottom.50percent" : "chart.bar.xaxis")
+                }
+                .help(showingDashboard ? "Ürün görünümüne dön" : "Genel izleme özetini göster")
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    activeSheet = .addProduct(initialURL: nil)
+                } label: {
+                    Label("Ürün Ekle", systemImage: "plus")
+                }
+                .help("Ürün Ekle (⌘N)")
+                .disabled(isCheckSequenceRunning)
+                .keyboardShortcut("n", modifiers: .command)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    startManualCheck()
+                } label: {
+                    if isChecking {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(width: 16, height: 16)
+                    } else {
+                        Label("Şimdi Kontrol Et", systemImage: "arrow.clockwise")
+                    }
+                }
+                .help(networkMonitor.canProceedWithChecks ? "Şimdi Kontrol Et (⌘R)" : "Ağ bağlantısı bekleniyor")
+                .disabled(isCheckSequenceRunning || selectedProductIndex == nil || !networkMonitor.canProceedWithChecks || (selectedProductIndex.map { trackedProducts[$0].isPaused } ?? false))
+                .keyboardShortcut("r", modifiers: .command)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    startManualCheckAll()
+                } label: {
+                    Label("Şimdi Tümünü Kontrol Et", systemImage: "arrow.clockwise.circle")
+                }
+                .help(networkMonitor.canProceedWithChecks ? "Şimdi Tümünü Kontrol Et (⇧⌘R)" : "Ağ bağlantısı bekleniyor")
+                .disabled(isCheckSequenceRunning || !trackedProducts.contains(where: { !$0.isPaused }) || !networkMonitor.canProceedWithChecks)
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+            }
+            ToolbarItem(placement: .primaryAction) {
+                SettingsLink {
+                    Label("Ayarlar", systemImage: "gearshape")
+                }
+                .help("Ayarlar")
             }
         }
         .frame(minWidth: 760, minHeight: 500)
+    }
+
+    private var emptyStateInfo: ProductListEmptyState {
+        ProductListEmptyState.resolve(
+            totalProductCount: trackedProducts.count,
+            searchText: productSearchText,
+            statusFilter: productStatusFilter,
+            providerFilter: selectedProviderFilter,
+            groupFilter: selectedGroupFilter,
+            tagFilter: selectedTagFilter
+        )
     }
 
     @ViewBuilder
@@ -1041,17 +1115,25 @@ struct ContentView: View {
                     }
                     .padding(8)
                 } else if visibleTrackedProducts.isEmpty {
+                    let state = emptyStateInfo
                     ContentUnavailableView {
-                        Label(productSearchText.isEmpty ? "Takip edilen ürün yok" : "Sonuç bulunamadı", systemImage: "shippingbox")
+                        Label(state.title, systemImage: state.systemImage)
                     } description: {
-                        Text(productSearchText.isEmpty ? "Bir ürün ekleyerek stok takibine başlayın." : "Arama veya filtre ölçütlerini değiştirmeyi deneyin.")
+                        Text(state.description)
                     } actions: {
-                        if isAnyFilterActive {
-                            Button("Filtreleri Temizle") {
+                        switch state.actionType {
+                        case .addProduct:
+                            Button("Ürün Ekle", systemImage: "plus") {
+                                activeSheet = .addProduct(initialURL: nil)
+                            }
+                        case .clearSearch:
+                            Button("Aramayı Temizle", systemImage: "xmark.circle") {
+                                productSearchText = ""
+                            }
+                        case .clearFilters:
+                            Button("Filtreleri Temizle", systemImage: "line.3.horizontal.decrease.circle") {
                                 clearAllFilters()
                             }
-                        } else {
-                            Button("Ürün Ekle", systemImage: "plus") { activeSheet = .addProduct(initialURL: nil) }
                         }
                     }
                 }
@@ -1117,14 +1199,6 @@ struct ContentView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
-            Button {
-                activeSheet = .addProduct(initialURL: nil)
-            } label: {
-                Label("Ürün Ekle", systemImage: "plus")
-            }
-            .labelStyle(.iconOnly)
-            .help("Ürün Ekle (⌘N)")
-            .disabled(isCheckSequenceRunning)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -1301,18 +1375,35 @@ struct ContentView: View {
             productDetailPane(for: selectedProductIndex)
         } else if trackedProducts.isEmpty {
             EmptyProductsView {
-                activeSheet = .addProduct
+                activeSheet = .addProduct(initialURL: nil)
+            }
+        } else if visibleTrackedProducts.isEmpty {
+            let state = emptyStateInfo
+            ContentUnavailableView {
+                Label(state.title, systemImage: state.systemImage)
+            } description: {
+                Text(state.description)
+            } actions: {
+                switch state.actionType {
+                case .addProduct:
+                    Button("Ürün Ekle", systemImage: "plus") {
+                        activeSheet = .addProduct(initialURL: nil)
+                    }
+                case .clearSearch:
+                    Button("Aramayı Temizle", systemImage: "xmark.circle") {
+                        productSearchText = ""
+                    }
+                case .clearFilters:
+                    Button("Filtreleri Temizle", systemImage: "line.3.horizontal.decrease.circle") {
+                        clearAllFilters()
+                    }
+                }
             }
         } else {
-            MonitoringDashboardView(
-                products: trackedProducts,
-                onSelectProduct: { id in
-                    selectedProductID = id
-                    showingDashboard = false
-                },
-                onAddProduct: {
-                    activeSheet = .addProduct
-                }
+            ContentUnavailableView(
+                "Ürün Seçilmedi",
+                systemImage: "sidebar.left",
+                description: Text("Detayları görüntülemek için sol panelden bir ürün seçin.")
             )
         }
     }
@@ -2255,6 +2346,7 @@ private struct ProductSidebarRow: View {
                         .foregroundStyle(product.isPaused ? .secondary : .primary)
                         .lineLimit(1)
                         .truncationMode(.tail)
+                        .help(product.productName)
 
                     Spacer(minLength: 2)
 
@@ -2441,6 +2533,7 @@ private struct ProductDetailView: View {
     @State private var selectedAnalyticsPeriod: StockAnalyticsPeriod = .sevenDays
     @State private var selectedVariantStateFilter: VariantAvailabilityState? = nil
     @AppStorage("adaptiveMonitoringEnabled") private var adaptiveMonitoringEnabled = false
+    @AppStorage("isGlobalMonitoringPaused") private var isGlobalMonitoringPaused = false
 
     @ObservedObject private var orgStore = ProductOrganizationStore.shared
     @ObservedObject private var auditManager = NotificationAuditManager.shared
@@ -2882,18 +2975,15 @@ private struct ProductDetailView: View {
     }
 
     private func nextCheckDescription(at now: Date) -> String {
-        if status == .paused { return "Takip duraklatıldı" }
-        if status == .checking { return "Kontrol ediliyor..." }
-        guard automaticCheckingEnabled else { return "Otomatik kontrol kapalı" }
-        guard product.lastChecked != nil, let nextCheckDate = product.nextCheckDate else {
-            return "Henüz kontrol planlanmadı"
-        }
-        let seconds = Int(nextCheckDate.timeIntervalSince(now).rounded(.up))
-        guard seconds > 0 else { return "Kontrol sırada" }
-        if seconds < 60 { return "\(seconds) sn" }
-        let minutes = seconds / 60
-        let remainder = seconds % 60
-        return remainder == 0 ? "\(minutes) dk" : "\(minutes) dk \(remainder) sn"
+        ProductSchedulingDescription.describe(
+            isGlobalMonitoringPaused: isGlobalMonitoringPaused,
+            isProductPaused: product.isPaused || status == .paused,
+            isChecking: status == .checking,
+            automaticCheckingEnabled: automaticCheckingEnabled,
+            lastChecked: product.lastChecked,
+            nextCheckDate: product.nextCheckDate,
+            now: now
+        )
     }
 
     private func basicInfoCard(at now: Date) -> some View {
@@ -2910,9 +3000,9 @@ private struct ProductDetailView: View {
                     detailLabel("Takip Durumu")
                     HStack(spacing: 6) {
                         StatusBadge(status: status)
-                        if product.isPaused {
-                            Text("(Duraklatıldı)")
-                                .font(.callout)
+                        if isGlobalMonitoringPaused && !product.isPaused {
+                            Text("(Genel tarama duraklatıldı)")
+                                .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -2926,10 +3016,28 @@ private struct ProductDetailView: View {
 
                 GridRow {
                     detailLabel("Son Kontrol")
-                    if let lastChecked = product.lastChecked {
-                        Text(TurkishRelativeTime.string(from: lastChecked))
-                            .font(.callout)
-                            .help(lastChecked.formatted(date: .long, time: .complete))
+                    if let lastSuccess = product.lastSuccessfulCheckDate {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(TurkishRelativeTime.string(from: lastSuccess))
+                                .font(.callout)
+                                .help(lastSuccess.formatted(date: .long, time: .complete))
+                            if product.hasCheckFailure, let lastAttempt = product.lastChecked, lastAttempt != lastSuccess {
+                                Text("Son deneme başarısız (\(TurkishRelativeTime.string(from: lastAttempt)))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                    } else if let lastChecked = product.lastChecked {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(TurkishRelativeTime.string(from: lastChecked))
+                                .font(.callout)
+                                .help(lastChecked.formatted(date: .long, time: .complete))
+                            if product.hasCheckFailure {
+                                Text("Kontrol başarısız")
+                                    .font(.caption2)
+                                    .foregroundStyle(.orange)
+                            }
+                        }
                     } else {
                         Text("Henüz kontrol yapılmadı")
                             .font(.callout)
@@ -2941,7 +3049,7 @@ private struct ProductDetailView: View {
                     detailLabel("Sıradaki Kontrol")
                     Text(nextCheckDescription(at: now))
                         .font(.callout)
-                        .foregroundStyle(status == .paused ? .secondary : .primary)
+                        .foregroundStyle((status == .paused || isGlobalMonitoringPaused) ? .secondary : .primary)
                 }
 
                 GridRow {
@@ -3045,15 +3153,6 @@ private struct ProductDetailView: View {
 
     private var smartTrackingCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Akıllı Takip ve Alarm Kuralı")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                Spacer()
-                Image(systemName: product.trackingRule.symbol)
-                    .foregroundStyle(Color.accentColor)
-            }
-
             VStack(alignment: .leading, spacing: 6) {
                 detailLabel("Takip Modu")
                 Picker("Takip Modu", selection: Binding(
@@ -3192,9 +3291,9 @@ private struct ProductDetailView: View {
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Kontrol Güvenilirliği")
+                Text("Durum Değerlendirmesi")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(.secondary)
 
                 Spacer()
 
@@ -3296,13 +3395,6 @@ private struct ProductDetailView: View {
 
     private var notificationAndAutomationCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Bildirimler ve Otomasyon")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                Spacer()
-            }
-
             Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 10) {
                 GridRow {
                     detailLabel("macOS Bildirimleri")
@@ -3414,13 +3506,6 @@ private struct ProductDetailView: View {
 
     private var organizationAndNotesCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Organizasyon ve Notlar")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                Spacer()
-            }
-
             Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 10) {
                 GridRow {
                     detailLabel("Grup")
@@ -4325,6 +4410,7 @@ private struct ProductDetailView: View {
                         .font(.callout)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .help(value)
                     Button {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(value, forType: .string)
@@ -6067,7 +6153,7 @@ private extension View {
             .contentMargins(.top, 10, for: .scrollContent)
             .contentMargins(.bottom, 16, for: .scrollContent)
             .scrollBounceBehavior(.basedOnSize)
-            .frame(maxWidth: 820)
+            .frame(maxWidth: 640)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(SettingsWindowConfigurator())
     }
@@ -6251,9 +6337,7 @@ private struct SettingsView: View {
                 Toggle("Zamanlanmış izlemeyi etkinleştir", isOn: $monitoringScheduleEnabled)
 
                 if monitoringScheduleEnabled {
-                    HStack {
-                        Text("Başlangıç saati:")
-                        Spacer()
+                    LabeledContent("Başlangıç saati:") {
                         Picker("Saat", selection: $monitoringScheduleStartHour) {
                             ForEach(0..<24, id: \.self) { h in
                                 Text(String(format: "%02d:00", h)).tag(h)
@@ -6263,9 +6347,7 @@ private struct SettingsView: View {
                         .frame(width: 90)
                     }
 
-                    HStack {
-                        Text("Bitiş saati:")
-                        Spacer()
+                    LabeledContent("Bitiş saati:") {
                         Picker("Saat", selection: $monitoringScheduleEndHour) {
                             ForEach(0..<24, id: \.self) { h in
                                 Text(String(format: "%02d:00", h)).tag(h)
@@ -6419,10 +6501,7 @@ private struct SettingsView: View {
 
                 if closedDisplayMonitoringEnabled {
                     VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Text("Ayrıcalıklı Yardımcı:")
-                                .font(.callout)
-                            Spacer()
+                        LabeledContent("Ayrıcalıklı Yardımcı") {
                             HStack(spacing: 4) {
                                 Circle()
                                     .fill(closedDisplayManager.authorizationStatus == .authorized ? Color.green : Color.orange)
